@@ -10,7 +10,7 @@ struct DiscoveredEndpoint: Sendable {
 final class BonjourDiscovery: NSObject {
     private var browser: NetServiceBrowser?
     private var resolvingService: NetService?
-    private var timeoutWorkItem: DispatchWorkItem?
+    private var timeoutTask: Task<Void, Never>?
     private var continuation: CheckedContinuation<DiscoveredEndpoint?, Never>?
 
     func discoverMusicAssistantEndpoint() async -> DiscoveredEndpoint? {
@@ -37,11 +37,11 @@ final class BonjourDiscovery: NSObject {
             self.browser = browser
             browser.searchForServices(ofType: serviceType, inDomain: "local.")
 
-            let timeoutWorkItem = DispatchWorkItem { [weak self] in
+            timeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                guard !Task.isCancelled else { return }
                 self?.finish(with: nil)
             }
-            self.timeoutWorkItem = timeoutWorkItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
         }
     }
 
@@ -57,8 +57,8 @@ final class BonjourDiscovery: NSObject {
     }
 
     private func stopCurrentSearch() {
-        timeoutWorkItem?.cancel()
-        timeoutWorkItem = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
 
         resolvingService?.stop()
         resolvingService?.delegate = nil

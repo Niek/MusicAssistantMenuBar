@@ -25,15 +25,14 @@ private struct MenuPanelView: View {
     @State private var showSettings = false
 
     private var statusColor: Color {
-        if store.isConnected {
+        switch store.connectionState {
+        case .connected:
             return Color(red: 0.14, green: 0.72, blue: 0.44)
-        }
-
-        if store.connectionText == "Authenticating" || store.connectionText == "Connecting" {
+        case .connecting, .authenticating:
             return Color(red: 0.92, green: 0.62, blue: 0.13)
+        case .disconnected:
+            return Color(red: 0.84, green: 0.33, blue: 0.33)
         }
-
-        return Color(red: 0.84, green: 0.33, blue: 0.33)
     }
 
     var body: some View {
@@ -72,7 +71,7 @@ private struct MenuPanelView: View {
         .frame(width: 348)
         .padding(10)
         .onAppear {
-            if store.connectionText == "Setup required" {
+            if !store.canSaveSettings {
                 showSettings = true
             }
         }
@@ -189,16 +188,7 @@ private struct MenuPanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+        .cardBackground()
     }
 
     private var targetCard: some View {
@@ -212,16 +202,7 @@ private struct MenuPanelView: View {
                 .foregroundStyle(.white.opacity(store.canControl ? 1 : 0.72))
                 .lineLimit(1)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+        .cardBackground()
     }
 
     private var playPauseButton: some View {
@@ -278,16 +259,7 @@ private struct MenuPanelView: View {
             )
             .frame(height: 18)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+        .cardBackground()
     }
 
     private var volumeCard: some View {
@@ -314,16 +286,7 @@ private struct MenuPanelView: View {
             .disabled(!store.canControl)
             .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+        .cardBackground()
     }
 
     @ViewBuilder
@@ -377,6 +340,32 @@ private struct MenuPanelView: View {
     }
 }
 
+// MARK: - Card Background Modifier
+
+private struct CardBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+    }
+}
+
+extension View {
+    fileprivate func cardBackground() -> some View {
+        modifier(CardBackground())
+    }
+}
+
+// MARK: - Marquee Text
+
 private struct MarqueeText: View {
     let text: String
     let textColor: Color
@@ -386,10 +375,12 @@ private struct MarqueeText: View {
     private let gap: CGFloat = 30
     private let speed: CGFloat = 36
 
+    @State private var cachedTextWidth: CGFloat?
+
     var body: some View {
         GeometryReader { geo in
             let availableWidth = max(geo.size.width, 1)
-            let contentWidth = measuredTextWidth
+            let contentWidth = cachedTextWidth ?? measureTextWidth()
             let shouldScroll = contentWidth > availableWidth
 
             if shouldScroll {
@@ -411,6 +402,12 @@ private struct MarqueeText: View {
             }
         }
         .clipped()
+        .onChange(of: text) { _ in
+            cachedTextWidth = measureTextWidth()
+        }
+        .onAppear {
+            cachedTextWidth = measureTextWidth()
+        }
     }
 
     private var label: some View {
@@ -421,34 +418,19 @@ private struct MarqueeText: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var measuredTextWidth: CGFloat {
-        let nsWeight = nsFontWeight(from: weight)
+    private func measureTextWidth() -> CGFloat {
+        let nsWeight: NSFont.Weight = switch weight {
+        case .ultraLight: .ultraLight
+        case .thin: .thin
+        case .light: .light
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        case .heavy: .heavy
+        case .black: .black
+        default: .regular
+        }
         let font = NSFont.systemFont(ofSize: fontSize, weight: nsWeight)
         return (text as NSString).size(withAttributes: [.font: font]).width
-    }
-
-    private func nsFontWeight(from weight: Font.Weight) -> NSFont.Weight {
-        switch weight {
-        case .ultraLight:
-            return .ultraLight
-        case .thin:
-            return .thin
-        case .light:
-            return .light
-        case .regular:
-            return .regular
-        case .medium:
-            return .medium
-        case .semibold:
-            return .semibold
-        case .bold:
-            return .bold
-        case .heavy:
-            return .heavy
-        case .black:
-            return .black
-        default:
-            return .regular
-        }
     }
 }

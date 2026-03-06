@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  build:
+    name: Build (macOS)
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build release binary
+        run: swift build -c release --product MusicAssistantMenuBar
+
+  release:
+    name: Build and publish release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      APP_NAME: MusicAssistantMenuBar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate signing secrets
+        env:
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if [[ -z "${SIGNING_CERT_P12_BASE64}" || -z "${SIGNING_CERT_PASSWORD}" ]]; then
+            echo "::error::Missing SIGNING_CERT_P12_BASE64 and/or SIGNING_CERT_PASSWORD repository secrets."
+            exit 1
+          fi
+
+      - name: Set version from tag
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build signed app bundle
+        env:
+          VERSION: ${{ env.VERSION }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          CI_KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+          NOTARIZE: ${{ secrets.NOTARIZE }}
+          NOTARY_PROFILE: ${{ secrets.NOTARY_PROFILE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./build.sh
+
+      - name: Prepare release asset
+        run: |
+          ASSET_PATH="dist/${APP_NAME}-${GITHUB_REF_NAME}.app.zip"
+          cp "dist/${APP_NAME}-${VERSION}.zip" "${ASSET_PATH}"
+          echo "RELEASE_ASSET=${ASSET_PATH}" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.APP_NAME }}-${{ github.ref_name }}
+          path: |
+            dist/${{ env.APP_NAME }}.app
+            ${{ env.RELEASE_ASSET }}
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.RELEASE_ASSET }}
+          generate_release_notes: true

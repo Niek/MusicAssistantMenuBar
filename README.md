@@ -67,21 +67,51 @@ Optional environment variables:
 
 Artifacts are written to `dist/`.
 
-### CI Example (GitHub Actions)
+## Publishing
 
-Self-contained step (imports signing cert from secrets):
+<details>
+<summary><strong>Publishing Instructions (Click to Expand)</strong></summary>
 
-```yaml
-- name: Build and sign
-  run: ./build.sh
-  env:
-    SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
-    SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
-    SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
-    BUNDLE_ID: io.yourcompany.musicassistant.menubar
-    VERSION: ${{ github.ref_name }}
-    BUILD_NUMBER: ${{ github.run_number }}
+GitHub Actions workflow: `.github/workflows/build.yml`
+
+- Every push/PR builds on macOS (`swift build -c release --product MusicAssistantMenuBar`)
+- Tag pushes with prefix `v` (for example `v1.2.3`) build a signed app and publish `${APP_NAME}-${tag}.app.zip` to GitHub Releases
+
+To use signing in CI, export your certificate:
+
+1. Open `Keychain Access` -> `login` -> `My Certificates`.
+2. Find `Developer ID Application: ...`.
+3. Right click -> `Export ...` -> save as `.p12` with a password.
+4. Convert to base64:
+
+```bash
+base64 -i /path/to/DeveloperID.p12 | pbcopy
 ```
+
+Set repository secrets:
+
+- `SIGNING_CERT_P12_BASE64`
+- `SIGNING_CERT_PASSWORD`
+- `SIGNING_IDENTITY` (optional, recommended)
+- `CI_KEYCHAIN_PASSWORD` (optional)
+
+Optional notarization secrets:
+
+- `NOTARIZE=1`
+- `NOTARY_PROFILE` (recommended), or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`
+
+Optional repository variable:
+
+- `BUNDLE_ID` (defaults to `io.example.musicassistant.menubar`)
+
+Create a release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+</details>
 
 ## Notes
 

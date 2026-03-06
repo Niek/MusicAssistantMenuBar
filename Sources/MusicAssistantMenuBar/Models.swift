@@ -61,7 +61,10 @@ struct MAPlayer: Sendable, Codable, Identifiable {
     }
 
     var isSyncedMember: Bool {
-        syncedTo != nil
+        guard let syncedTo, !syncedTo.isEmpty else {
+            return false
+        }
+        return syncedTo != playerID
     }
 
     var supportsPause: Bool {

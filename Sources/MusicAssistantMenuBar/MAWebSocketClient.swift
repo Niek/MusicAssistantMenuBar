@@ -14,7 +14,7 @@ actor MAWebSocketClient {
     private let onMessage: MessageHandler
     private let onStateChange: StateHandler
 
-    private var session: URLSession?
+    private let session: URLSession
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveLoopTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -37,6 +37,7 @@ actor MAWebSocketClient {
         self.token = token
         self.onMessage = onMessage
         self.onStateChange = onStateChange
+        self.session = URLSession(configuration: .default)
     }
 
     func connect() async {
@@ -88,9 +89,6 @@ actor MAWebSocketClient {
         }
 
         setState(.connecting)
-
-        let session = URLSession(configuration: .default)
-        self.session = session
 
         let task = session.webSocketTask(with: url)
         self.webSocketTask = task
@@ -326,9 +324,6 @@ actor MAWebSocketClient {
 
         receiveLoopTask?.cancel()
         receiveLoopTask = nil
-
-        session?.invalidateAndCancel()
-        session = nil
     }
 
     private func setState(_ newState: MAConnectionState) {

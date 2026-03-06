@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 final class PlayerStore: ObservableObject {
+    @Published private(set) var connectionState: MAConnectionState = .disconnected(reason: nil)
     @Published private(set) var connectionText = "Disconnected"
     @Published private(set) var statusSymbolName = "bolt.slash"
     @Published private(set) var targetText = "No active target"
@@ -21,7 +22,6 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var isDiscoveringHost = false
     @Published private(set) var settingsCollapseToken = 0
 
-    private var started = false
     private var playersByID: [String: MAPlayer] = [:]
     private var currentTargetID: String?
     private var lastSuccessfulTargetID: String?
@@ -43,34 +43,23 @@ final class PlayerStore: ObservableObject {
         apiPortInput = String(AppConfig.loadPort())
         apiTokenInput = AppConfig.loadToken()
 
-        start()
-
-        if apiHostInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            discoverHost()
-        }
-    }
-
-    func start() {
-        guard !started else {
-            return
-        }
-        started = true
-
-        mediaKeyMonitor = MediaKeyMonitor { [weak self] in
+        let monitor = MediaKeyMonitor { [weak self] in
             Task { @MainActor [weak self] in
                 self?.togglePlayPause()
             }
         }
+        mediaKeyMonitor = monitor
 
-        let captureMode = mediaKeyMonitor?.start()
-        mediaKeyCaptureWarning = {
-            guard captureMode == .passive else {
-                return nil
-            }
-            return "Enable Accessibility/Input Monitoring for this app to fully capture Play/Pause and prevent Apple Music from opening."
-        }()
+        let captureMode = monitor.start()
+        if captureMode == .passive {
+            mediaKeyCaptureWarning = "Enable Accessibility/Input Monitoring for this app to fully capture Play/Pause and prevent Apple Music from opening."
+        }
 
         connectUsingCurrentInputs(forceReconnect: false)
+
+        if apiHostInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            discoverHost()
+        }
     }
 
     func discoverHost() {
@@ -144,42 +133,33 @@ final class PlayerStore: ObservableObject {
             return
         }
 
-        let command = playbackCommand(for: target)
+        let preferredCommand = playbackCommand(for: target)
+        let fallbackCommand = "players/cmd/play_pause"
+        let commands = preferredCommand == fallbackCommand
+            ? [preferredCommand]
+            : [preferredCommand, fallbackCommand]
 
         Task {
+            await sendPlaybackCommand(commands: commands, playerID: target.playerID, client: client)
+        }
+    }
+
+    private func sendPlaybackCommand(commands: [String], playerID: String, client: MAWebSocketClient) async {
+        for command in commands {
             do {
                 _ = try await client.send(
                     command: command,
-                    args: ["player_id": .string(target.playerID)]
+                    args: ["player_id": .string(playerID)]
                 )
-                await MainActor.run {
-                    self.lastSuccessfulTargetID = target.playerID
-                    self.errorText = nil
-                }
+                lastSuccessfulTargetID = playerID
+                errorText = nil
+                return
             } catch {
-                // Compatibility fallback for players/providers that only implement play_pause.
-                if command != "players/cmd/play_pause" {
-                    do {
-                        _ = try await client.send(
-                            command: "players/cmd/play_pause",
-                            args: ["player_id": .string(target.playerID)]
-                        )
-                        await MainActor.run {
-                            self.lastSuccessfulTargetID = target.playerID
-                            self.errorText = nil
-                        }
-                        return
-                    } catch {
-                        await MainActor.run {
-                            self.errorText = error.localizedDescription
-                        }
-                        return
-                    }
+                // If this was the last command to try, report the error.
+                if command == commands.last {
+                    errorText = error.localizedDescription
                 }
-
-                await MainActor.run {
-                    self.errorText = error.localizedDescription
-                }
+                // Otherwise try the next fallback command.
             }
         }
     }
@@ -297,6 +277,7 @@ final class PlayerStore: ObservableObject {
     }
 
     private func applySetupRequiredState(message: String = "Configure host, port, and token") {
+        connectionState = .disconnected(reason: nil)
         connectionText = "Setup required"
         statusSymbolName = "slider.horizontal.3"
         isConnected = false
@@ -354,10 +335,10 @@ final class PlayerStore: ObservableObject {
     }
 
     private func resolveCurrentTarget() -> MAPlayer? {
-        let target = resolvePreferredTarget()
-        currentTargetID = target?.playerID
-        applyTargetPresentation(target)
-        return target
+        if let currentTargetID, let existing = playersByID[currentTargetID], existing.isAvailable {
+            return existing
+        }
+        return resolvePreferredTarget()
     }
 
     private func applyTargetPresentation(_ target: MAPlayer?) {
@@ -428,6 +409,8 @@ final class PlayerStore: ObservableObject {
     }
 
     private func handleConnectionState(_ state: MAConnectionState) {
+        connectionState = state
+
         switch state {
         case .connecting:
             connectionText = "Connecting"
