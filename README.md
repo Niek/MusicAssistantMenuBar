@@ -49,6 +49,7 @@ Use `build.sh` for a signed distributable `.app` and `.zip` (outside Mac App Sto
 
 Optional environment variables:
 
+- `SIGN_APP` (default: `1`; set `0` to skip code signing for CI/dev artifacts)
 - `SIGNING_IDENTITY` (optional; auto-detected when possible)
 - `APP_NAME` (default: `MusicAssistantMenuBar`)
 - `PRODUCT_NAME` (default: `MusicAssistantMenuBar`)
@@ -74,7 +75,7 @@ Artifacts are written to `dist/`.
 
 GitHub Actions workflow: `.github/workflows/build.yml`
 
-- Every push/PR builds on macOS (`swift build -c release --product MusicAssistantMenuBar`)
+- Every push/PR builds on macOS and uploads an unsigned `.app` + `.zip` as workflow artifacts
 - Tag pushes with prefix `v` (for example `v1.2.3`) build a signed app and publish `${APP_NAME}-${tag}.app.zip` to GitHub Releases
 
 To use signing in CI, export your certificate:

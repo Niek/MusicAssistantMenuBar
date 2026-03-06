@@ -12,6 +12,7 @@ BUILD_NUMBER="${BUILD_NUMBER:-1}"
 CONFIGURATION="${CONFIGURATION:-release}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/dist}"
 APP_ICON_PATH="${APP_ICON_PATH:-$ROOT_DIR/Assets/AppIcon.icns}"
+SIGN_APP="${SIGN_APP:-1}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 SIGNING_KEYCHAIN="${SIGNING_KEYCHAIN:-}"
 SIGNING_CERT_P12_BASE64="${SIGNING_CERT_P12_BASE64:-}"
@@ -28,82 +29,94 @@ if ! command -v swift >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v codesign >/dev/null 2>&1; then
-  echo "error: codesign is required" >&2
+if [[ "$SIGN_APP" != "0" && "$SIGN_APP" != "1" ]]; then
+  echo "error: SIGN_APP must be 0 or 1" >&2
   exit 1
 fi
 
-if [[ -n "$SIGNING_CERT_P12_BASE64" ]]; then
-  if ! command -v security >/dev/null 2>&1; then
-    echo "error: security tool is required to import signing certificate" >&2
-    exit 1
-  fi
-
-  if [[ -z "$SIGNING_CERT_PASSWORD" ]]; then
-    echo "error: SIGNING_CERT_PASSWORD is required when SIGNING_CERT_P12_BASE64 is set" >&2
-    exit 1
-  fi
-
-  TMP_DIR="$(mktemp -d)"
-  CERT_P12_PATH="$TMP_DIR/signing-cert.p12"
-  KEYCHAIN_PATH="$TMP_DIR/ci-signing.keychain-db"
-  KEYCHAIN_PASS="${CI_KEYCHAIN_PASSWORD:-$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 32)}"
-  cleanup() {
-    rm -rf "$TMP_DIR"
-  }
-  trap cleanup EXIT
-
-  echo "==> Importing signing certificate into temporary keychain"
-  if base64 --help 2>/dev/null | grep -q -- '--decode'; then
-    echo "$SIGNING_CERT_P12_BASE64" | base64 --decode > "$CERT_P12_PATH"
-  else
-    echo "$SIGNING_CERT_P12_BASE64" | base64 -D > "$CERT_P12_PATH"
-  fi
-
-  security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-  security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-  security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-  security import "$CERT_P12_PATH" -k "$KEYCHAIN_PATH" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
-  security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" >/dev/null
-
-  EXISTING_KEYCHAINS=()
-  while IFS= read -r line; do
-    EXISTING_KEYCHAINS+=("$line")
-  done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"([^"]+)"$/\1/')
-  security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}" >/dev/null
-  SIGNING_KEYCHAIN="${SIGNING_KEYCHAIN:-$KEYCHAIN_PATH}"
+if [[ "$NOTARIZE" == "1" && "$SIGN_APP" != "1" ]]; then
+  echo "error: NOTARIZE=1 requires SIGN_APP=1" >&2
+  exit 1
 fi
 
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  IDENTITY_CMD=(security find-identity -v -p codesigning)
-  if [[ -n "$SIGNING_KEYCHAIN" ]]; then
-    IDENTITY_CMD+=("$SIGNING_KEYCHAIN")
+if [[ "$SIGN_APP" == "1" ]]; then
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "error: codesign is required" >&2
+    exit 1
   fi
 
-  AVAILABLE_IDENTITIES=()
-  while IFS= read -r line; do
-    AVAILABLE_IDENTITIES+=("$line")
-  done < <("${IDENTITY_CMD[@]}" | awk -F\" '/\"/ {print $2}')
-
-  for identity in "${AVAILABLE_IDENTITIES[@]}"; do
-    if [[ "$identity" == Developer\ ID\ Application:* ]]; then
-      SIGNING_IDENTITY="$identity"
-      break
+  if [[ -n "$SIGNING_CERT_P12_BASE64" ]]; then
+    if ! command -v security >/dev/null 2>&1; then
+      echo "error: security tool is required to import signing certificate" >&2
+      exit 1
     fi
-  done
 
-  if [[ -z "$SIGNING_IDENTITY" && ${#AVAILABLE_IDENTITIES[@]} -gt 0 ]]; then
-    SIGNING_IDENTITY="${AVAILABLE_IDENTITIES[0]}"
+    if [[ -z "$SIGNING_CERT_PASSWORD" ]]; then
+      echo "error: SIGNING_CERT_PASSWORD is required when SIGNING_CERT_P12_BASE64 is set" >&2
+      exit 1
+    fi
+
+    TMP_DIR="$(mktemp -d)"
+    CERT_P12_PATH="$TMP_DIR/signing-cert.p12"
+    KEYCHAIN_PATH="$TMP_DIR/ci-signing.keychain-db"
+    KEYCHAIN_PASS="${CI_KEYCHAIN_PASSWORD:-$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 32)}"
+    cleanup() {
+      rm -rf "$TMP_DIR"
+    }
+    trap cleanup EXIT
+
+    echo "==> Importing signing certificate into temporary keychain"
+    if base64 --help 2>/dev/null | grep -q -- '--decode'; then
+      echo "$SIGNING_CERT_P12_BASE64" | base64 --decode > "$CERT_P12_PATH"
+    else
+      echo "$SIGNING_CERT_P12_BASE64" | base64 -D > "$CERT_P12_PATH"
+    fi
+
+    security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+    security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+    security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+    security import "$CERT_P12_PATH" -k "$KEYCHAIN_PATH" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
+    security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" >/dev/null
+
+    EXISTING_KEYCHAINS=()
+    while IFS= read -r line; do
+      EXISTING_KEYCHAINS+=("$line")
+    done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"([^"]+)"$/\1/')
+    security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}" >/dev/null
+    SIGNING_KEYCHAIN="${SIGNING_KEYCHAIN:-$KEYCHAIN_PATH}"
   fi
 
-  if [[ -n "$SIGNING_IDENTITY" ]]; then
-    echo "==> Auto-selected signing identity: $SIGNING_IDENTITY"
-  fi
-fi
+  if [[ -z "$SIGNING_IDENTITY" ]]; then
+    IDENTITY_CMD=(security find-identity -v -p codesigning)
+    if [[ -n "$SIGNING_KEYCHAIN" ]]; then
+      IDENTITY_CMD+=("$SIGNING_KEYCHAIN")
+    fi
 
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  echo "error: no signing identity found. Set SIGNING_IDENTITY or import a cert with SIGNING_CERT_P12_BASE64" >&2
-  exit 1
+    AVAILABLE_IDENTITIES=()
+    while IFS= read -r line; do
+      AVAILABLE_IDENTITIES+=("$line")
+    done < <("${IDENTITY_CMD[@]}" | awk -F\" '/\"/ {print $2}')
+
+    for identity in "${AVAILABLE_IDENTITIES[@]}"; do
+      if [[ "$identity" == Developer\ ID\ Application:* ]]; then
+        SIGNING_IDENTITY="$identity"
+        break
+      fi
+    done
+
+    if [[ -z "$SIGNING_IDENTITY" && ${#AVAILABLE_IDENTITIES[@]} -gt 0 ]]; then
+      SIGNING_IDENTITY="${AVAILABLE_IDENTITIES[0]}"
+    fi
+
+    if [[ -n "$SIGNING_IDENTITY" ]]; then
+      echo "==> Auto-selected signing identity: $SIGNING_IDENTITY"
+    fi
+  fi
+
+  if [[ -z "$SIGNING_IDENTITY" ]]; then
+    echo "error: no signing identity found. Set SIGNING_IDENTITY or import a cert with SIGNING_CERT_P12_BASE64" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -168,20 +181,24 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Signing app with identity: $SIGNING_IDENTITY"
-CODESIGN_ARGS=(
-  --force
-  --timestamp
-  --options runtime
-  --sign "$SIGNING_IDENTITY"
-)
+if [[ "$SIGN_APP" == "1" ]]; then
+  echo "==> Signing app with identity: $SIGNING_IDENTITY"
+  CODESIGN_ARGS=(
+    --force
+    --timestamp
+    --options runtime
+    --sign "$SIGNING_IDENTITY"
+  )
 
-if [[ -n "$SIGNING_KEYCHAIN" ]]; then
-  CODESIGN_ARGS+=(--keychain "$SIGNING_KEYCHAIN")
+  if [[ -n "$SIGNING_KEYCHAIN" ]]; then
+    CODESIGN_ARGS+=(--keychain "$SIGNING_KEYCHAIN")
+  fi
+
+  codesign "${CODESIGN_ARGS[@]}" "$APP_DIR"
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+else
+  echo "==> Skipping signing (SIGN_APP=0)"
 fi
-
-codesign "${CODESIGN_ARGS[@]}" "$APP_DIR"
-codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 echo "==> Creating zip artifact"
 rm -f "$ZIP_PATH"
