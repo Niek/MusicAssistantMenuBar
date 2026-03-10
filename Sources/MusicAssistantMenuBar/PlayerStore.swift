@@ -9,8 +9,10 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var statusSymbolName = "bolt.slash"
     @Published private(set) var targetText = "No active target"
     @Published private(set) var nowPlayingText = "Nothing playing"
+    @Published private(set) var nowPlayingArtworkURL: URL?
     @Published private(set) var playPauseTitle = "Play/Pause"
     @Published private(set) var playPauseIconName = "playpause.fill"
+    @Published private(set) var isTargetPlaying = false
     @Published private(set) var canControl = false
     @Published private(set) var canSkipTrack = false
     @Published private(set) var errorText: String?
@@ -412,8 +414,10 @@ final class PlayerStore: ObservableObject {
         canSkipTrack = (target?.supportsNextPrevious ?? false) && isConnected
         targetText = target?.resolvedName ?? "No active target"
         nowPlayingText = nowPlayingLine(for: target)
+        nowPlayingArtworkURL = resolveArtworkURL(for: target)
 
         if let target {
+            isTargetPlaying = target.isPlaying
             if target.isPlaying {
                 playPauseTitle = "Pause"
                 playPauseIconName = "pause.fill"
@@ -422,6 +426,7 @@ final class PlayerStore: ObservableObject {
                 playPauseIconName = "play.fill"
             }
         } else {
+            isTargetPlaying = false
             playPauseTitle = "Play/Pause"
             playPauseIconName = "playpause.fill"
         }
@@ -435,6 +440,38 @@ final class PlayerStore: ObservableObject {
             return line
         }
         return target.isPlaying ? "Playing" : "Nothing playing"
+    }
+
+    private func resolveArtworkURL(for target: MAPlayer?) -> URL? {
+        guard let rawArtworkURL = target?.currentMedia?.artworkURLString else {
+            return nil
+        }
+
+        let trimmed = rawArtworkURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        if let absolute = URL(string: trimmed), absolute.scheme != nil {
+            return absolute
+        }
+
+        guard let baseURL = activeConfiguration?.httpBaseURL else {
+            return nil
+        }
+
+        if let relative = URL(string: trimmed, relativeTo: baseURL) {
+            return relative.absoluteURL
+        }
+
+        if
+            let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+            let relative = URL(string: encoded, relativeTo: baseURL)
+        {
+            return relative.absoluteURL
+        }
+
+        return nil
     }
 
     private func playbackCommand(for target: MAPlayer) -> String {

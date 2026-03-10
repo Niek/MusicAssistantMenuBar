@@ -110,10 +110,36 @@ struct MACurrentMedia: Sendable, Codable {
     let title: String?
     let name: String?
     let artist: String?
+    let artworkURLString: String?
+
+    init(title: String?, name: String?, artist: String?, artworkURLString: String?) {
+        self.title = title
+        self.name = name
+        self.artist = artist
+        self.artworkURLString = artworkURLString
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+
+        title = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("title")))
+        name = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("name")))
+        artist = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("artist")))
+        artworkURLString = Self.decodeArtworkURL(from: container)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+
+        try container.encodeIfPresent(title, forKey: DynamicCodingKey("title"))
+        try container.encodeIfPresent(name, forKey: DynamicCodingKey("name"))
+        try container.encodeIfPresent(artist, forKey: DynamicCodingKey("artist"))
+        try container.encodeIfPresent(artworkURLString, forKey: DynamicCodingKey("image_url"))
+    }
 
     var displayLine: String? {
-        let trackTitle = cleaned(title) ?? cleaned(name)
-        let artistName = cleaned(artist)
+        let trackTitle = Self.cleaned(title) ?? Self.cleaned(name)
+        let artistName = Self.cleaned(artist)
 
         if let artistName, let trackTitle {
             return "\(artistName) - \(trackTitle)"
@@ -127,12 +153,120 @@ struct MACurrentMedia: Sendable, Codable {
         return nil
     }
 
-    private func cleaned(_ value: String?) -> String? {
+    private static let artworkCandidateKeys = [
+        "image_url",
+        "image",
+        "thumbnail",
+        "thumb",
+        "album_art_url",
+        "album_art",
+        "cover_url",
+        "cover",
+        "art_url",
+        "artwork_url"
+    ]
+
+    private static func decodeArtworkURL(
+        from container: KeyedDecodingContainer<DynamicCodingKey>
+    ) -> String? {
+        for keyName in artworkCandidateKeys {
+            let key = DynamicCodingKey(keyName)
+            if
+                let value = try? container.decodeIfPresent(JSONValue.self, forKey: key),
+                let candidate = extractArtworkURL(from: value)
+            {
+                return candidate
+            }
+        }
+
+        for key in container.allKeys {
+            let lowercased = key.stringValue.lowercased()
+            guard
+                lowercased.contains("image")
+                    || lowercased.contains("thumb")
+                    || lowercased.contains("cover")
+                    || lowercased.contains("art")
+            else {
+                continue
+            }
+
+            if
+                let value = try? container.decodeIfPresent(JSONValue.self, forKey: key),
+                let candidate = extractArtworkURL(from: value)
+            {
+                return candidate
+            }
+        }
+
+        if
+            let metadataValue = try? container.decodeIfPresent(JSONValue.self, forKey: DynamicCodingKey("metadata")),
+            let candidate = extractArtworkURL(from: metadataValue)
+        {
+            return candidate
+        }
+
+        return nil
+    }
+
+    private static func extractArtworkURL(from value: JSONValue?) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        switch value {
+        case let .string(raw):
+            return cleaned(raw)
+        case let .object(object):
+            for key in artworkCandidateKeys {
+                if let candidate = extractArtworkURL(from: object[key]) {
+                    return candidate
+                }
+            }
+
+            for key in ["url", "uri", "path", "file", "images", "thumb", "thumbnail"] {
+                if let candidate = extractArtworkURL(from: object[key]) {
+                    return candidate
+                }
+            }
+            return nil
+        case let .array(values):
+            for value in values {
+                if let candidate = extractArtworkURL(from: value) {
+                    return candidate
+                }
+            }
+            return nil
+        case .number, .integer, .bool, .null:
+            return nil
+        }
+    }
+
+    private static func cleaned(_ value: String?) -> String? {
         guard let value else {
             return nil
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private struct DynamicCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int?
+
+        init(_ stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
     }
 }
 

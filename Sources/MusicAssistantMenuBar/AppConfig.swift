@@ -9,6 +9,10 @@ struct APIConnectionConfiguration: Equatable, Sendable {
     var webSocketURL: URL? {
         URL(string: "ws://\(host):\(port)/ws")
     }
+
+    var httpBaseURL: URL? {
+        URL(string: "http://\(host):\(port)")
+    }
 }
 
 enum AppConfig {

@@ -35,6 +35,20 @@ private struct MenuPanelView: View {
         }
     }
 
+    private var transportBarColors: [Color] {
+        if store.canControl && store.isTargetPlaying {
+            return [
+                Color(red: 0.16, green: 0.56, blue: 0.88),
+                Color(red: 0.11, green: 0.42, blue: 0.77)
+            ]
+        }
+
+        return [
+            Color(red: 0.38, green: 0.42, blue: 0.49),
+            Color(red: 0.30, green: 0.34, blue: 0.40)
+        ]
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -230,7 +244,7 @@ private struct MenuPanelView: View {
                     Image(systemName: store.playPauseIconName)
                         .font(.system(size: 13, weight: .semibold))
                     Text(store.playPauseTitle)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity, minHeight: 42)
                 .contentShape(Rectangle())
@@ -258,10 +272,7 @@ private struct MenuPanelView: View {
         .foregroundStyle(.white)
         .background(
             LinearGradient(
-                colors: [
-                    Color(red: 0.16, green: 0.56, blue: 0.88),
-                    Color(red: 0.11, green: 0.42, blue: 0.77)
-                ],
+                colors: transportBarColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -280,15 +291,62 @@ private struct MenuPanelView: View {
                 .foregroundStyle(.white.opacity(0.68))
                 .textCase(.uppercase)
 
-            MarqueeText(
-                text: store.nowPlayingText,
-                textColor: .white.opacity(store.canControl ? 0.92 : 0.62),
-                fontSize: 13,
-                weight: .medium
-            )
-            .frame(height: 18)
+            HStack(spacing: 10) {
+                artworkThumbnail
+
+                MarqueeText(
+                    text: store.nowPlayingText,
+                    textColor: .white.opacity(store.canControl ? 0.92 : 0.62),
+                    fontSize: 18,
+                    weight: .semibold
+                )
+                .frame(height: 24)
+            }
         }
         .cardBackground()
+    }
+
+    @ViewBuilder
+    private var artworkThumbnail: some View {
+        if let artworkURL = store.nowPlayingArtworkURL {
+            AsyncImage(url: artworkURL, transaction: Transaction(animation: .easeInOut(duration: 0.2))) { phase in
+                switch phase {
+                case let .success(image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                case .failure:
+                    artworkPlaceholder
+                case .empty:
+                    artworkPlaceholder.opacity(0.8)
+                @unknown default:
+                    artworkPlaceholder
+                }
+            }
+            .frame(width: 34, height: 34)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+            )
+        } else {
+            artworkPlaceholder
+                .frame(width: 34, height: 34)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        }
+    }
+
+    private var artworkPlaceholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+            Image(systemName: "music.note")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.58))
+        }
     }
 
     private var volumeCard: some View {
