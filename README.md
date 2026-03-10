@@ -17,7 +17,7 @@ Minimal menu bar controller for a Music Assistant server.
   - Prefer currently playing group player
   - Else currently playing non-synced coordinator
   - Else last successful target
-- Play/Pause control
+- Previous/Play-Pause/Next transport controls
 - Play/Pause button label reflects current state (`Play` when paused/idle, `Pause` when playing)
 - Volume slider (0-100)
   - Group target: `players/cmd/group_volume`
@@ -119,3 +119,4 @@ git push origin v1.0.0
 - Host/port are saved in `UserDefaults` and token is saved in Keychain.
 - Use the gear button in the menu panel to configure host/port/token and connect.
 - To fully block Apple Music from launching on Play/Pause, grant Accessibility/Input Monitoring permissions to the app process. Without permissions, the app falls back to passive key monitoring.
+- The permission warning includes quick actions: `Allow Access`, `Open Settings`, and `Retry`.

@@ -1,3 +1,5 @@
+import AppKit
+import ApplicationServices
 import Foundation
 
 @MainActor
@@ -10,6 +12,7 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var playPauseTitle = "Play/Pause"
     @Published private(set) var playPauseIconName = "playpause.fill"
     @Published private(set) var canControl = false
+    @Published private(set) var canSkipTrack = false
     @Published private(set) var errorText: String?
     @Published private(set) var mediaKeyCaptureWarning: String?
     @Published private(set) var isConnected = false
@@ -38,6 +41,10 @@ final class PlayerStore: ObservableObject {
         configurationFromInputs != nil
     }
 
+    private var mediaKeyPermissionWarningText: String {
+        "Enable Accessibility/Input Monitoring for this app to fully capture Play/Pause and prevent Apple Music from opening."
+    }
+
     init() {
         apiHostInput = AppConfig.loadHost()
         apiPortInput = String(AppConfig.loadPort())
@@ -52,7 +59,7 @@ final class PlayerStore: ObservableObject {
 
         let captureMode = monitor.start()
         if captureMode == .passive {
-            mediaKeyCaptureWarning = "Enable Accessibility/Input Monitoring for this app to fully capture Play/Pause and prevent Apple Music from opening."
+            mediaKeyCaptureWarning = mediaKeyPermissionWarningText
         }
 
         connectUsingCurrentInputs(forceReconnect: false)
@@ -122,6 +129,41 @@ final class PlayerStore: ObservableObject {
         connectUsingCurrentInputs(forceReconnect: true)
     }
 
+    func requestMediaKeyPermissions() {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        _ = CGRequestListenEventAccess()
+
+        openMediaKeySettings()
+    }
+
+    func openMediaKeySettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy"
+        ]
+
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else {
+                continue
+            }
+            if NSWorkspace.shared.open(url) {
+                break
+            }
+        }
+    }
+
+    func retryMediaKeyCapture() {
+        guard let mediaKeyMonitor else {
+            return
+        }
+
+        mediaKeyMonitor.stop()
+        let captureMode = mediaKeyMonitor.start()
+        mediaKeyCaptureWarning = captureMode == .exclusive ? nil : mediaKeyPermissionWarningText
+    }
+
     func togglePlayPause() {
         guard let target = resolveCurrentTarget() else {
             errorText = "No active target available"
@@ -144,6 +186,14 @@ final class PlayerStore: ObservableObject {
         }
     }
 
+    func previousTrack() {
+        sendTransportCommand(["players/cmd/previous"])
+    }
+
+    func nextTrack() {
+        sendTransportCommand(["players/cmd/next"])
+    }
+
     private func sendPlaybackCommand(commands: [String], playerID: String, client: MAWebSocketClient) async {
         for command in commands {
             do {
@@ -161,6 +211,22 @@ final class PlayerStore: ObservableObject {
                 }
                 // Otherwise try the next fallback command.
             }
+        }
+    }
+
+    private func sendTransportCommand(_ commands: [String]) {
+        guard let target = resolveCurrentTarget() else {
+            errorText = "No active target available"
+            return
+        }
+
+        guard let client else {
+            errorText = "Configure API host and token first"
+            return
+        }
+
+        Task {
+            await sendPlaybackCommand(commands: commands, playerID: target.playerID, client: client)
         }
     }
 
@@ -343,6 +409,7 @@ final class PlayerStore: ObservableObject {
 
     private func applyTargetPresentation(_ target: MAPlayer?) {
         canControl = target != nil && isConnected
+        canSkipTrack = (target?.supportsNextPrevious ?? false) && isConnected
         targetText = target?.resolvedName ?? "No active target"
         nowPlayingText = nowPlayingLine(for: target)
 

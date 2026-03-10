@@ -60,7 +60,7 @@ private struct MenuPanelView: View {
                 }
                 targetCard
                 nowPlayingCard
-                playPauseButton
+                transportControls
                 volumeCard
                 warningView
                 errorView
@@ -205,43 +205,72 @@ private struct MenuPanelView: View {
         .cardBackground()
     }
 
-    private var playPauseButton: some View {
-        Button {
-            store.togglePlayPause()
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: store.playPauseIconName)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(store.playPauseTitle)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                Spacer()
-                Image(systemName: "keyboard")
-                    .font(.system(size: 12, weight: .semibold))
-                    .opacity(0.82)
+    private var transportControls: some View {
+        HStack(spacing: 0) {
+            Button {
+                store.previousTrack()
+            } label: {
+                Image(systemName: "backward.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 54, height: 42)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.16, green: 0.56, blue: 0.88),
-                        Color(red: 0.11, green: 0.42, blue: 0.77)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-            )
+            .buttonStyle(.plain)
+            .disabled(!store.canSkipTrack)
+            .opacity(store.canSkipTrack ? 1 : 0.45)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 1, height: 26)
+
+            Button {
+                store.togglePlayPause()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: store.playPauseIconName)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(store.playPauseTitle)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                }
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.canControl)
+            .opacity(store.canControl ? 1 : 0.45)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 1, height: 26)
+
+            Button {
+                store.nextTrack()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 54, height: 42)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.canSkipTrack)
+            .opacity(store.canSkipTrack ? 1 : 0.45)
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .opacity(store.canControl ? 1 : 0.45)
-        .disabled(!store.canControl)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.16, green: 0.56, blue: 0.88),
+                    Color(red: 0.11, green: 0.42, blue: 0.77)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
     }
 
     private var nowPlayingCard: some View {
@@ -292,15 +321,37 @@ private struct MenuPanelView: View {
     @ViewBuilder
     private var warningView: some View {
         if let warning = store.mediaKeyCaptureWarning, !warning.isEmpty {
-            Label(warning, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(red: 0.94, green: 0.75, blue: 0.25))
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(red: 0.47, green: 0.34, blue: 0.07).opacity(0.3))
-                )
+            VStack(alignment: .leading, spacing: 9) {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.94, green: 0.75, blue: 0.25))
+
+                HStack(spacing: 8) {
+                    Button("Allow Access") {
+                        store.requestMediaKeyPermissions()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Open Settings") {
+                        store.openMediaKeySettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Retry") {
+                        store.retryMediaKeyCapture()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(red: 0.47, green: 0.34, blue: 0.07).opacity(0.3))
+            )
         }
     }
 

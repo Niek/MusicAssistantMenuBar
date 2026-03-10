@@ -71,6 +71,10 @@ struct MAPlayer: Sendable, Codable, Identifiable {
         supportedFeatures?.contains("pause") ?? false
     }
 
+    var supportsNextPrevious: Bool {
+        supportedFeatures?.contains("next_previous") ?? false
+    }
+
     var isGroupLike: Bool {
         if (type ?? "").lowercased() == "group" {
             return true
