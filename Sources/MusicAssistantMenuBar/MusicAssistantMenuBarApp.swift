@@ -24,6 +24,7 @@ private struct MenuPanelView: View {
     @ObservedObject var store: PlayerStore
     @State private var showSettings = false
     @State private var showPlayerSelector = false
+    @State private var showFavoriteSelector = false
 
     private var statusColor: Color {
         switch store.connectionState {
@@ -98,6 +99,20 @@ private struct MenuPanelView: View {
         .onChange(of: store.canChoosePlayer) { canChoosePlayer in
             if !canChoosePlayer {
                 showPlayerSelector = false
+            }
+        }
+        .onChange(of: store.hasFavoriteMediaItems) { hasFavoriteMediaItems in
+            if !hasFavoriteMediaItems {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showFavoriteSelector = false
+                }
+            }
+        }
+        .onChange(of: store.canControl) { canControl in
+            if !canControl {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showFavoriteSelector = false
+                }
             }
         }
     }
@@ -378,6 +393,31 @@ private struct MenuPanelView: View {
     }
 
     private var nowPlayingCard: some View {
+        VStack(alignment: .leading, spacing: showFavoriteSelector ? 12 : 7) {
+            if store.hasFavoriteMediaItems {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showFavoriteSelector.toggle()
+                    }
+                } label: {
+                    nowPlayingCardHeader(showChevron: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(!store.canControl || store.isSwitchingPlayer)
+                .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.72)
+            } else {
+                nowPlayingCardHeader(showChevron: false)
+            }
+
+            if showFavoriteSelector {
+                favoriteMediaSelector
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .cardBackground()
+    }
+
+    private func nowPlayingCardHeader(showChevron: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Now Playing")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -393,10 +433,86 @@ private struct MenuPanelView: View {
                     fontSize: 18,
                     weight: .semibold
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 24)
+
+                if showChevron {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.74))
+                        .rotationEffect(.degrees(showFavoriteSelector ? 180 : 0))
+                }
             }
         }
-        .cardBackground()
+        .contentShape(Rectangle())
+    }
+
+    private var favoriteMediaSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !store.favoritePlaylists.isEmpty {
+                favoriteMediaSection(
+                    title: "Playlists",
+                    items: store.favoritePlaylists
+                )
+            }
+
+            if !store.favoriteAlbums.isEmpty {
+                favoriteMediaSection(
+                    title: "Albums",
+                    items: store.favoriteAlbums
+                )
+            }
+        }
+    }
+
+    private func favoriteMediaSection(title: String, items: [MAFavoriteMediaItem]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.56))
+                .textCase(.uppercase)
+
+            ForEach(items) { item in
+                favoriteOptionButton(item: item) {
+                    store.playFavoriteItem(item)
+                    showFavoriteSelector = false
+                }
+            }
+        }
+    }
+
+    private func favoriteOptionButton(
+        item: MAFavoriteMediaItem,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: item.kind.iconName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.22, green: 0.70, blue: 0.92))
+
+                Text(item.title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!store.canControl || store.isSwitchingPlayer)
+        .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.45)
     }
 
     @ViewBuilder

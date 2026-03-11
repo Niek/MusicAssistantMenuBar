@@ -274,6 +274,78 @@ struct MACurrentMedia: Sendable, Codable {
     }
 }
 
+enum MAFavoriteMediaKind: String, Sendable {
+    case playlist
+    case album
+
+    var iconName: String {
+        switch self {
+        case .playlist:
+            return "music.note.list"
+        case .album:
+            return "square.stack.fill"
+        }
+    }
+
+    var placeholderTitle: String {
+        switch self {
+        case .playlist:
+            return "Untitled Playlist"
+        case .album:
+            return "Untitled Album"
+        }
+    }
+}
+
+struct MAFavoriteMediaItem: Sendable, Identifiable {
+    let id: String
+    let kind: MAFavoriteMediaKind
+    let title: String
+    let uri: String?
+    let rawPayload: JSONValue
+
+    init?(kind: MAFavoriteMediaKind, value: JSONValue) {
+        guard let object = value.objectValue else {
+            return nil
+        }
+
+        let uri = Self.cleanedString(from: object["uri"])
+        let itemID = Self.identifierString(from: object["item_id"])
+        let title = Self.cleanedString(from: object["name"])
+            ?? Self.cleanedString(from: object["title"])
+            ?? kind.placeholderTitle
+        let stableComponent = uri ?? itemID ?? title
+
+        self.id = "\(kind.rawValue):\(stableComponent)"
+        self.kind = kind
+        self.title = title
+        self.uri = uri
+        rawPayload = value
+    }
+
+    private static func identifierString(from value: JSONValue?) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        if let stringValue = cleanedString(from: value) {
+            return stringValue
+        }
+        if let intValue = value.intValue {
+            return String(intValue)
+        }
+        return nil
+    }
+
+    private static func cleanedString(from value: JSONValue?) -> String? {
+        guard let stringValue = value?.stringValue else {
+            return nil
+        }
+        let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 enum MAConnectionState: Sendable, Equatable {
     case disconnected(reason: String?)
     case connecting

@@ -19,6 +19,8 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var mediaKeyCaptureWarning: String?
     @Published private(set) var isConnected = false
     @Published private(set) var isSwitchingPlayer = false
+    @Published private(set) var favoritePlaylists: [MAFavoriteMediaItem] = []
+    @Published private(set) var favoriteAlbums: [MAFavoriteMediaItem] = []
     @Published var sliderVolume: Double = 0
 
     @Published var apiHostInput: String
@@ -41,12 +43,22 @@ final class PlayerStore: ObservableObject {
     private var activeConfiguration: APIConnectionConfiguration?
     private var collapseSettingsOnNextConnect = false
 
+    private let favoriteMediaLimit = 10
+    private let playNowQueueOption = "replace"
+
     var canSaveSettings: Bool {
         configurationFromInputs != nil
     }
 
     var canChoosePlayer: Bool {
         isConnected && selectableTargets.count > 1 && !isSwitchingPlayer
+    }
+
+    var hasFavoriteMediaItems: Bool {
+        Self.hasFavoriteMediaItems(
+            playlists: favoritePlaylists,
+            albums: favoriteAlbums
+        )
     }
 
     private var mediaKeyPermissionWarningText: String {
@@ -223,6 +235,22 @@ final class PlayerStore: ObservableObject {
             queueCommand: "player_queues/next",
             playerCommands: ["players/cmd/next"]
         )
+    }
+
+    func playFavoriteItem(_ item: MAFavoriteMediaItem) {
+        guard let target = resolveCurrentTarget() else {
+            errorText = "No active target available"
+            return
+        }
+
+        guard let client else {
+            errorText = "Configure API host and token first"
+            return
+        }
+
+        Task {
+            await playFavoriteItem(item, on: target.playerID, client: client)
+        }
     }
 
     private func sendTransportCommand(
@@ -412,6 +440,7 @@ final class PlayerStore: ObservableObject {
         canControl = false
         errorText = nil
         settingsStatusText = message
+        clearFavoriteMedia()
         updateTargetAndUI()
     }
 
@@ -431,6 +460,27 @@ final class PlayerStore: ObservableObject {
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    private func refreshFavoriteMedia() async {
+        guard let client else {
+            clearFavoriteMedia()
+            return
+        }
+
+        let activeClient = client
+        async let playlists = fetchFavoriteMediaItems(kind: .playlist, client: activeClient)
+        async let albums = fetchFavoriteMediaItems(kind: .album, client: activeClient)
+
+        let favoritePlaylists = await playlists
+        let favoriteAlbums = await albums
+
+        guard isConnected, self.client === activeClient else {
+            return
+        }
+
+        self.favoritePlaylists = favoritePlaylists
+        self.favoriteAlbums = favoriteAlbums
     }
 
     private func applySnapshot(_ players: [MAPlayer]) {
@@ -560,6 +610,70 @@ final class PlayerStore: ObservableObject {
             : [preferredCommand, fallbackCommand]
     }
 
+    private func fetchFavoriteMediaItems(
+        kind: MAFavoriteMediaKind,
+        client: MAWebSocketClient
+    ) async -> [MAFavoriteMediaItem] {
+        do {
+            guard let result = try await client.send(
+                command: favoriteLibraryCommand(for: kind),
+                args: [
+                    "favorite": .bool(true),
+                    "limit": .integer(favoriteMediaLimit)
+                ]
+            ) else {
+                return []
+            }
+
+            return favoriteMediaItems(from: result, kind: kind)
+        } catch {
+            return []
+        }
+    }
+
+    private func favoriteLibraryCommand(for kind: MAFavoriteMediaKind) -> String {
+        switch kind {
+        case .playlist:
+            return "music/playlists/library_items"
+        case .album:
+            return "music/albums/library_items"
+        }
+    }
+
+    private func favoriteMediaItems(from result: JSONValue, kind: MAFavoriteMediaKind) -> [MAFavoriteMediaItem] {
+        let values = result.arrayValue ?? []
+        return values.compactMap { MAFavoriteMediaItem(kind: kind, value: $0) }
+    }
+
+    private func playFavoriteItem(
+        _ item: MAFavoriteMediaItem,
+        on playerID: String,
+        client: MAWebSocketClient
+    ) async {
+        do {
+            let queueID = try await activeQueueID(for: playerID, client: client) ?? playerID
+            let mediaArgument = item.uri.map(JSONValue.string) ?? item.rawPayload
+
+            _ = try await client.send(
+                command: "player_queues/play_media",
+                args: [
+                    "queue_id": .string(queueID),
+                    "media": mediaArgument,
+                    "option": .string(playNowQueueOption)
+                ]
+            )
+            lastSuccessfulTargetID = playerID
+            errorText = nil
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func clearFavoriteMedia() {
+        favoritePlaylists = []
+        favoriteAlbums = []
+    }
+
     private func transferPlayback(to targetPlayerID: String) async {
         guard let client else {
             return
@@ -647,6 +761,13 @@ final class PlayerStore: ObservableObject {
         )
     }
 
+    nonisolated static func hasFavoriteMediaItems(
+        playlists: [MAFavoriteMediaItem],
+        albums: [MAFavoriteMediaItem]
+    ) -> Bool {
+        !playlists.isEmpty || !albums.isEmpty
+    }
+
     private func handleConnectionState(_ state: MAConnectionState) {
         connectionState = state
 
@@ -669,12 +790,15 @@ final class PlayerStore: ObservableObject {
                 settingsCollapseToken &+= 1
             }
             Task {
-                await refreshPlayers()
+                async let playersRefresh: Void = refreshPlayers()
+                async let favoritesRefresh: Void = refreshFavoriteMedia()
+                _ = await (playersRefresh, favoritesRefresh)
             }
         case let .disconnected(reason):
             connectionText = "Disconnected"
             statusSymbolName = "bolt.slash"
             isConnected = false
+            clearFavoriteMedia()
             if let reason, !reason.isEmpty {
                 errorText = reason
             }
