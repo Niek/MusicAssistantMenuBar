@@ -23,6 +23,7 @@ struct MusicAssistantMenuBarApp: App {
 private struct MenuPanelView: View {
     @ObservedObject var store: PlayerStore
     @State private var showSettings = false
+    @State private var showPlayerSelector = false
 
     private var statusColor: Color {
         switch store.connectionState {
@@ -72,7 +73,7 @@ private struct MenuPanelView: View {
                 if showSettings {
                     settingsCard
                 }
-                targetCard
+                playerCard
                 nowPlayingCard
                 transportControls
                 volumeCard
@@ -92,6 +93,11 @@ private struct MenuPanelView: View {
         .onChange(of: store.settingsCollapseToken) { _ in
             withAnimation(.easeInOut(duration: 0.18)) {
                 showSettings = false
+            }
+        }
+        .onChange(of: store.canChoosePlayer) { canChoosePlayer in
+            if !canChoosePlayer {
+                showPlayerSelector = false
             }
         }
     }
@@ -205,18 +211,105 @@ private struct MenuPanelView: View {
         .cardBackground()
     }
 
-    private var targetCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Target")
+    private var playerCard: some View {
+        VStack(alignment: .leading, spacing: showPlayerSelector ? 12 : 10) {
+            if store.canChoosePlayer {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showPlayerSelector.toggle()
+                    }
+                } label: {
+                    playerCardHeader(showChevron: true)
+                }
+                .buttonStyle(.plain)
+            } else {
+                playerCardHeader(showChevron: false)
+            }
+
+            if store.isSwitchingPlayer {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
+                    Text("Switching...")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.74))
+                }
+            } else if showPlayerSelector {
+                VStack(spacing: 6) {
+                    ForEach(store.selectableTargets) { target in
+                        playerOptionButton(
+                            title: target.resolvedName,
+                            isSelected: store.isCurrentTarget(id: target.playerID)
+                        ) {
+                            store.selectTarget(id: target.playerID)
+                            showPlayerSelector = false
+                        }
+                    }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .cardBackground()
+    }
+
+    private func playerCardHeader(showChevron: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Player")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.68))
                 .textCase(.uppercase)
-            Text(store.targetText)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(store.canControl ? 1 : 0.72))
-                .lineLimit(1)
+
+            HStack(spacing: 10) {
+                Text(store.targetText)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity((showChevron || store.isSwitchingPlayer) ? 1 : 0.72))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                if showChevron {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.74))
+                        .rotationEffect(.degrees(showPlayerSelector ? 180 : 0))
+                }
+            }
         }
-        .cardBackground()
+        .contentShape(Rectangle())
+    }
+
+    private func playerOptionButton(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color(red: 0.22, green: 0.70, blue: 0.92) : .white.opacity(0.36))
+
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.10) : Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(isSelected ? Color.white.opacity(0.14) : Color.white.opacity(0.06), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var transportControls: some View {
@@ -230,8 +323,8 @@ private struct MenuPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!store.canSkipTrack)
-            .opacity(store.canSkipTrack ? 1 : 0.45)
+            .disabled(!store.canSkipTrack || store.isSwitchingPlayer)
+            .opacity((store.canSkipTrack && !store.isSwitchingPlayer) ? 1 : 0.45)
 
             Rectangle()
                 .fill(Color.white.opacity(0.22))
@@ -250,8 +343,8 @@ private struct MenuPanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!store.canControl)
-            .opacity(store.canControl ? 1 : 0.45)
+            .disabled(!store.canControl || store.isSwitchingPlayer)
+            .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.45)
 
             Rectangle()
                 .fill(Color.white.opacity(0.22))
@@ -266,8 +359,8 @@ private struct MenuPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!store.canSkipTrack)
-            .opacity(store.canSkipTrack ? 1 : 0.45)
+            .disabled(!store.canSkipTrack || store.isSwitchingPlayer)
+            .opacity((store.canSkipTrack && !store.isSwitchingPlayer) ? 1 : 0.45)
         }
         .foregroundStyle(.white)
         .background(
@@ -370,7 +463,7 @@ private struct MenuPanelView: View {
                 in: 0...100,
                 step: 1
             )
-            .disabled(!store.canControl)
+            .disabled(!store.canControl || store.isSwitchingPlayer)
             .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
         }
         .cardBackground()

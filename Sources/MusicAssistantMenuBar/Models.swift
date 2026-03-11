@@ -67,6 +67,10 @@ struct MAPlayer: Sendable, Codable, Identifiable {
         return syncedTo != playerID
     }
 
+    var isSelectableTarget: Bool {
+        isAvailable && (isGroupLike || !isSyncedMember)
+    }
+
     var supportsPause: Bool {
         supportedFeatures?.contains("pause") ?? false
     }

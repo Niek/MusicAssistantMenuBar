@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "MusicAssistantMenuBar",
             path: "Sources/MusicAssistantMenuBar"
+        ),
+        .testTarget(
+            name: "MusicAssistantMenuBarTests",
+            dependencies: ["MusicAssistantMenuBar"],
+            path: "Tests/MusicAssistantMenuBarTests"
         )
     ]
 )

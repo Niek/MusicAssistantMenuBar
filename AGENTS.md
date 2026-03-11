@@ -37,6 +37,12 @@ Build:
 swift build -c release --product MusicAssistantMenuBar
 ```
 
+Test:
+
+```bash
+swift test
+```
+
 Package app bundle (and sign by default):
 
 ```bash
@@ -68,8 +74,8 @@ SIGN_APP=0 ./build.sh
 
 ## CI / Release Notes
 
-- Regular pushes/PRs: macOS build, unsigned `.app` + `.zip` uploaded as artifacts.
-- `v*` tags: signed build + GitHub Release asset upload.
+- Regular pushes/PRs: `swift test`, then macOS build, unsigned `.app` + `.zip` uploaded as artifacts.
+- `v*` tags: `swift test`, then signed build + GitHub Release asset upload.
 - Required release secrets are documented in `README.md`.
 
 ## Persistence / Security

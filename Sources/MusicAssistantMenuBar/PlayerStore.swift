@@ -18,11 +18,13 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var errorText: String?
     @Published private(set) var mediaKeyCaptureWarning: String?
     @Published private(set) var isConnected = false
+    @Published private(set) var isSwitchingPlayer = false
     @Published var sliderVolume: Double = 0
 
     @Published var apiHostInput: String
     @Published var apiPortInput: String
     @Published var apiTokenInput: String
+    @Published private(set) var selectableTargets: [MAPlayer] = []
     @Published private(set) var settingsStatusText: String?
     @Published private(set) var isDiscoveringHost = false
     @Published private(set) var settingsCollapseToken = 0
@@ -41,6 +43,10 @@ final class PlayerStore: ObservableObject {
 
     var canSaveSettings: Bool {
         configurationFromInputs != nil
+    }
+
+    var canChoosePlayer: Bool {
+        isConnected && selectableTargets.count > 1 && !isSwitchingPlayer
     }
 
     private var mediaKeyPermissionWarningText: String {
@@ -166,6 +172,24 @@ final class PlayerStore: ObservableObject {
         mediaKeyCaptureWarning = captureMode == .exclusive ? nil : mediaKeyPermissionWarningText
     }
 
+    func selectTarget(id: String) {
+        guard selectableTargets.contains(where: { $0.playerID == id }) else {
+            return
+        }
+
+        guard currentTargetID != id else {
+            return
+        }
+
+        Task { [weak self] in
+            await self?.transferPlayback(to: id)
+        }
+    }
+
+    func isCurrentTarget(id: String) -> Bool {
+        currentTargetID == id
+    }
+
     func togglePlayPause() {
         guard let target = resolveCurrentTarget() else {
             errorText = "No active target available"
@@ -177,26 +201,57 @@ final class PlayerStore: ObservableObject {
             return
         }
 
-        let preferredCommand = playbackCommand(for: target)
-        let fallbackCommand = "players/cmd/play_pause"
-        let commands = preferredCommand == fallbackCommand
-            ? [preferredCommand]
-            : [preferredCommand, fallbackCommand]
-
         Task {
-            await sendPlaybackCommand(commands: commands, playerID: target.playerID, client: client)
+            await sendTransportCommand(
+                queueCommand: "player_queues/play_pause",
+                playerCommands: playbackFallbackCommands(for: target),
+                playerID: target.playerID,
+                client: client
+            )
         }
     }
 
     func previousTrack() {
-        sendTransportCommand(["players/cmd/previous"])
+        sendTransportCommand(
+            queueCommand: "player_queues/previous",
+            playerCommands: ["players/cmd/previous"]
+        )
     }
 
     func nextTrack() {
-        sendTransportCommand(["players/cmd/next"])
+        sendTransportCommand(
+            queueCommand: "player_queues/next",
+            playerCommands: ["players/cmd/next"]
+        )
     }
 
-    private func sendPlaybackCommand(commands: [String], playerID: String, client: MAWebSocketClient) async {
+    private func sendTransportCommand(
+        queueCommand: String?,
+        playerCommands: [String],
+        playerID: String,
+        client: MAWebSocketClient
+    ) async {
+        if let queueCommand {
+            do {
+                _ = try await client.send(
+                    command: queueCommand,
+                    args: ["queue_id": .string(playerID)]
+                )
+                lastSuccessfulTargetID = playerID
+                errorText = nil
+                return
+            } catch {
+                if playerCommands.isEmpty {
+                    errorText = error.localizedDescription
+                    return
+                }
+            }
+        }
+
+        await sendPlayerCommands(commands: playerCommands, playerID: playerID, client: client)
+    }
+
+    private func sendPlayerCommands(commands: [String], playerID: String, client: MAWebSocketClient) async {
         for command in commands {
             do {
                 _ = try await client.send(
@@ -216,7 +271,7 @@ final class PlayerStore: ObservableObject {
         }
     }
 
-    private func sendTransportCommand(_ commands: [String]) {
+    private func sendTransportCommand(queueCommand: String?, playerCommands: [String]) {
         guard let target = resolveCurrentTarget() else {
             errorText = "No active target available"
             return
@@ -228,7 +283,12 @@ final class PlayerStore: ObservableObject {
         }
 
         Task {
-            await sendPlaybackCommand(commands: commands, playerID: target.playerID, client: client)
+            await sendTransportCommand(
+                queueCommand: queueCommand,
+                playerCommands: playerCommands,
+                playerID: target.playerID,
+                client: client
+            )
         }
     }
 
@@ -392,7 +452,13 @@ final class PlayerStore: ObservableObject {
     }
 
     private func updateTargetAndUI() {
-        let target = resolvePreferredTarget()
+        let resolution = Self.resolveSelectableTargets(
+            players: Array(playersByID.values),
+            lastSuccessfulTargetID: lastSuccessfulTargetID
+        )
+        let target = resolution.target
+
+        selectableTargets = resolution.selectableTargets
         currentTargetID = target?.playerID
 
         applyTargetPresentation(target)
@@ -406,7 +472,11 @@ final class PlayerStore: ObservableObject {
         if let currentTargetID, let existing = playersByID[currentTargetID], existing.isAvailable {
             return existing
         }
-        return resolvePreferredTarget()
+
+        return Self.resolveSelectableTargets(
+            players: Array(playersByID.values),
+            lastSuccessfulTargetID: lastSuccessfulTargetID
+        ).target
     }
 
     private func applyTargetPresentation(_ target: MAPlayer?) {
@@ -481,35 +551,100 @@ final class PlayerStore: ObservableObject {
         return "players/cmd/play"
     }
 
-    private func resolvePreferredTarget() -> MAPlayer? {
-        let available = playersByID.values.filter { $0.isAvailable }
-        let playing = available.filter { $0.isPlaying }
+    private func playbackFallbackCommands(for target: MAPlayer) -> [String] {
+        let preferredCommand = playbackCommand(for: target)
+        let fallbackCommand = "players/cmd/play_pause"
 
-        let groupTarget = sortPlayers(playing.filter { $0.isGroupLike }).first
-        if let groupTarget {
-            return groupTarget
-        }
-
-        let coordinatorTarget = sortPlayers(playing.filter { !$0.isSyncedMember }).first
-        if let coordinatorTarget {
-            return coordinatorTarget
-        }
-
-        if
-            let lastSuccessfulTargetID,
-            let fallback = available.first(where: { $0.playerID == lastSuccessfulTargetID })
-        {
-            return fallback
-        }
-
-        return nil
+        return preferredCommand == fallbackCommand
+            ? [preferredCommand]
+            : [preferredCommand, fallbackCommand]
     }
 
-    private func sortPlayers(_ players: [MAPlayer]) -> [MAPlayer] {
-        players.sorted {
-            let lhs = ($0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName), $0.playerID)
-            return lhs.0 == .orderedAscending || (lhs.0 == .orderedSame && lhs.1 < $1.playerID)
+    private func transferPlayback(to targetPlayerID: String) async {
+        guard let client else {
+            return
         }
+
+        isSwitchingPlayer = true
+        let switchStartedAt = Date()
+        defer {
+            let elapsed = Date().timeIntervalSince(switchStartedAt)
+            let remaining = max(0, 0.35 - elapsed)
+
+            Task { @MainActor [weak self] in
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+                self?.isSwitchingPlayer = false
+            }
+        }
+
+        guard let sourceTarget = resolveCurrentTarget() else {
+            lastSuccessfulTargetID = targetPlayerID
+            updateTargetAndUI()
+            errorText = nil
+            return
+        }
+
+        do {
+            guard
+                let sourceQueueID = try await activeQueueID(for: sourceTarget.playerID, client: client),
+                sourceQueueID != targetPlayerID
+            else {
+                lastSuccessfulTargetID = targetPlayerID
+                updateTargetAndUI()
+                errorText = nil
+                return
+            }
+
+            _ = try await client.send(
+                command: "player_queues/transfer",
+                args: [
+                    "source_queue_id": .string(sourceQueueID),
+                    "target_queue_id": .string(targetPlayerID)
+                ]
+            )
+            lastSuccessfulTargetID = targetPlayerID
+            updateTargetAndUI()
+            errorText = nil
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func activeQueueID(for playerID: String, client: MAWebSocketClient) async throws -> String? {
+        guard
+            let result = try await client.send(
+                command: "player_queues/get_active_queue",
+                args: ["player_id": .string(playerID)]
+            )
+        else {
+            return nil
+        }
+
+        return result.objectValue?["queue_id"]?.stringValue
+    }
+
+    nonisolated static func resolveSelectableTargets(
+        players: [MAPlayer],
+        lastSuccessfulTargetID: String?
+    ) -> TargetSelectionResolution {
+        let selectableTargets = players
+            .filter(\.isSelectableTarget)
+            .sorted {
+                let lhs = ($0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName), $0.playerID)
+                return lhs.0 == .orderedAscending || (lhs.0 == .orderedSame && lhs.1 < $1.playerID)
+            }
+
+        let playingTargets = selectableTargets.filter(\.isPlaying)
+        let preferredTarget = playingTargets.first(where: \.isGroupLike)
+            ?? playingTargets.first(where: { !$0.isSyncedMember })
+            ?? selectableTargets.first(where: { $0.playerID == lastSuccessfulTargetID })
+
+        return TargetSelectionResolution(
+            target: preferredTarget,
+            selectableTargets: selectableTargets
+        )
     }
 
     private func handleConnectionState(_ state: MAConnectionState) {
@@ -598,4 +733,9 @@ final class PlayerStore: ObservableObject {
 
         return nil
     }
+}
+
+struct TargetSelectionResolution {
+    let target: MAPlayer?
+    let selectableTargets: [MAPlayer]
 }

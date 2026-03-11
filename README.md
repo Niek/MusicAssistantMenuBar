@@ -39,6 +39,12 @@ swift run MusicAssistantMenuBar
 swift build
 ```
 
+## Test
+
+```bash
+swift test
+```
+
 ## Signed Build Script
 
 Use `build.sh` for a signed distributable `.app` and `.zip` (outside Mac App Store):
@@ -75,8 +81,8 @@ Artifacts are written to `dist/`.
 
 GitHub Actions workflow: `.github/workflows/build.yml`
 
-- Every push/PR builds on macOS and uploads an unsigned `.app` + `.zip` as workflow artifacts
-- Tag pushes with prefix `v` (for example `v1.2.3`) build a signed app and publish `${APP_NAME}-${tag}.app.zip` to GitHub Releases
+- Every push/PR runs `swift test`, then builds on macOS and uploads an unsigned `.app` + `.zip` as workflow artifacts
+- Tag pushes with prefix `v` (for example `v1.2.3`) run `swift test`, then build a signed app and publish `${APP_NAME}-${tag}.app.zip` to GitHub Releases
 
 To use signing in CI, export your certificate:
 
