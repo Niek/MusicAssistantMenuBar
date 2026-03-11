@@ -570,9 +570,11 @@ private struct MenuPanelView: View {
     private var warningView: some View {
         if let warning = store.mediaKeyCaptureWarning, !warning.isEmpty {
             VStack(alignment: .leading, spacing: 9) {
-                Label(warning, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.94, green: 0.75, blue: 0.25))
+                statusMessageCard(
+                    text: warning,
+                    systemImage: "exclamationmark.triangle.fill",
+                    foregroundColor: Color(red: 0.94, green: 0.75, blue: 0.25)
+                )
 
                 HStack(spacing: 8) {
                     Button("Allow Access") {
@@ -606,15 +608,37 @@ private struct MenuPanelView: View {
     @ViewBuilder
     private var errorView: some View {
         if let errorText = store.errorText, !errorText.isEmpty {
-            Label(errorText, systemImage: "xmark.octagon.fill")
+            statusMessageCard(
+                text: errorText,
+                systemImage: "xmark.octagon.fill",
+                foregroundColor: Color(red: 0.98, green: 0.48, blue: 0.48)
+            )
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(red: 0.46, green: 0.08, blue: 0.12).opacity(0.28))
+            )
+        }
+    }
+
+    private func statusMessageCard(
+        text: String,
+        systemImage: String,
+        foregroundColor: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(foregroundColor)
+                .padding(.top, 1)
+
+            Text(text)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(red: 0.98, green: 0.48, blue: 0.48))
-                .padding(10)
+                .foregroundStyle(foregroundColor)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(red: 0.46, green: 0.08, blue: 0.12).opacity(0.28))
-                )
         }
     }
 
