@@ -17,7 +17,6 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var canSkipTrack = false
     @Published private(set) var errorText: String?
     @Published private(set) var mediaKeyCaptureWarning: String?
-    @Published private(set) var isConnected = false
     @Published private(set) var isSwitchingPlayer = false
     @Published private(set) var favoritePlaylists: [MAFavoriteMediaItem] = []
     @Published private(set) var favoriteAlbums: [MAFavoriteMediaItem] = []
@@ -45,6 +44,10 @@ final class PlayerStore: ObservableObject {
 
     private let favoriteMediaLimit = 10
     private let playNowQueueOption = "replace"
+
+    var isConnected: Bool {
+        connectionState == .connected
+    }
 
     var canSaveSettings: Bool {
         configurationFromInputs != nil
@@ -203,15 +206,7 @@ final class PlayerStore: ObservableObject {
     }
 
     func togglePlayPause() {
-        guard let target = resolveCurrentTarget() else {
-            errorText = "No active target available"
-            return
-        }
-
-        guard let client else {
-            errorText = "Configure API host and token first"
-            return
-        }
+        guard let (target, client) = requireTargetAndClient() else { return }
 
         Task {
             await sendTransportCommand(
@@ -224,29 +219,31 @@ final class PlayerStore: ObservableObject {
     }
 
     func previousTrack() {
-        sendTransportCommand(
-            queueCommand: "player_queues/previous",
-            playerCommands: ["players/cmd/previous"]
-        )
+        guard let (target, client) = requireTargetAndClient() else { return }
+        Task {
+            await sendTransportCommand(
+                queueCommand: "player_queues/previous",
+                playerCommands: ["players/cmd/previous"],
+                playerID: target.playerID,
+                client: client
+            )
+        }
     }
 
     func nextTrack() {
-        sendTransportCommand(
-            queueCommand: "player_queues/next",
-            playerCommands: ["players/cmd/next"]
-        )
+        guard let (target, client) = requireTargetAndClient() else { return }
+        Task {
+            await sendTransportCommand(
+                queueCommand: "player_queues/next",
+                playerCommands: ["players/cmd/next"],
+                playerID: target.playerID,
+                client: client
+            )
+        }
     }
 
     func playFavoriteItem(_ item: MAFavoriteMediaItem) {
-        guard let target = resolveCurrentTarget() else {
-            errorText = "No active target available"
-            return
-        }
-
-        guard let client else {
-            errorText = "Configure API host and token first"
-            return
-        }
+        guard let (target, client) = requireTargetAndClient() else { return }
 
         Task {
             await playFavoriteItem(item, on: target.playerID, client: client)
@@ -299,29 +296,24 @@ final class PlayerStore: ObservableObject {
         }
     }
 
-    private func sendTransportCommand(queueCommand: String?, playerCommands: [String]) {
+    private func requireTargetAndClient() -> (MAPlayer, MAWebSocketClient)? {
         guard let target = resolveCurrentTarget() else {
             errorText = "No active target available"
-            return
+            return nil
         }
 
         guard let client else {
             errorText = "Configure API host and token first"
-            return
+            return nil
         }
 
-        Task {
-            await sendTransportCommand(
-                queueCommand: queueCommand,
-                playerCommands: playerCommands,
-                playerID: target.playerID,
-                client: client
-            )
-        }
+        return (target, client)
     }
 
     func setVolume(_ newValue: Double) {
-        sliderVolume = min(max(newValue.rounded(), 0), 100)
+        let clamped = min(max(newValue.rounded(), 0), 100)
+        guard sliderVolume != clamped else { return }
+        sliderVolume = clamped
 
         volumeSendTask?.cancel()
         let level = Int(sliderVolume)
@@ -332,15 +324,7 @@ final class PlayerStore: ObservableObject {
     }
 
     private func sendVolume(_ level: Int) async {
-        guard let target = resolveCurrentTarget() else {
-            errorText = "No active target available"
-            return
-        }
-
-        guard let client else {
-            errorText = "Configure API host and token first"
-            return
-        }
+        guard let (target, client) = requireTargetAndClient() else { return }
 
         let command = target.isGroupLike ? "players/cmd/group_volume" : "players/cmd/volume_set"
 
@@ -436,7 +420,6 @@ final class PlayerStore: ObservableObject {
         connectionState = .disconnected(reason: nil)
         connectionText = "Setup required"
         statusSymbolName = "slider.horizontal.3"
-        isConnected = false
         canControl = false
         errorText = nil
         settingsStatusText = message
@@ -514,7 +497,10 @@ final class PlayerStore: ObservableObject {
         applyTargetPresentation(target)
 
         if let volume = target?.effectiveVolume {
-            sliderVolume = Double(volume)
+            let newVolume = Double(volume)
+            if sliderVolume != newVolume {
+                sliderVolume = newVolume
+            }
         }
     }
 
@@ -775,15 +761,12 @@ final class PlayerStore: ObservableObject {
         case .connecting:
             connectionText = "Connecting"
             statusSymbolName = "arrow.triangle.2.circlepath"
-            isConnected = false
         case .authenticating:
             connectionText = "Authenticating"
             statusSymbolName = "lock.shield"
-            isConnected = false
         case .connected:
             connectionText = "Connected"
             statusSymbolName = "dot.radiowaves.left.and.right"
-            isConnected = true
             settingsStatusText = nil
             if collapseSettingsOnNextConnect {
                 collapseSettingsOnNextConnect = false
@@ -797,7 +780,6 @@ final class PlayerStore: ObservableObject {
         case let .disconnected(reason):
             connectionText = "Disconnected"
             statusSymbolName = "bolt.slash"
-            isConnected = false
             clearFavoriteMedia()
             if let reason, !reason.isEmpty {
                 errorText = reason

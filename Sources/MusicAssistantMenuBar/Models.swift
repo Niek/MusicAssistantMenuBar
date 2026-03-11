@@ -126,9 +126,9 @@ struct MACurrentMedia: Sendable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: DynamicCodingKey.self)
 
-        title = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("title")))
-        name = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("name")))
-        artist = Self.cleaned(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("artist")))
+        title = cleanedString(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("title")))
+        name = cleanedString(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("name")))
+        artist = cleanedString(try container.decodeIfPresent(String.self, forKey: DynamicCodingKey("artist")))
         artworkURLString = Self.decodeArtworkURL(from: container)
     }
 
@@ -142,8 +142,8 @@ struct MACurrentMedia: Sendable, Codable {
     }
 
     var displayLine: String? {
-        let trackTitle = Self.cleaned(title) ?? Self.cleaned(name)
-        let artistName = Self.cleaned(artist)
+        let trackTitle = cleanedString(title) ?? cleanedString(name)
+        let artistName = cleanedString(artist)
 
         if let artistName, let trackTitle {
             return "\(artistName) - \(trackTitle)"
@@ -219,7 +219,7 @@ struct MACurrentMedia: Sendable, Codable {
 
         switch value {
         case let .string(raw):
-            return cleaned(raw)
+            return cleanedString(raw)
         case let .object(object):
             for key in artworkCandidateKeys {
                 if let candidate = extractArtworkURL(from: object[key]) {
@@ -243,14 +243,6 @@ struct MACurrentMedia: Sendable, Codable {
         case .number, .integer, .bool, .null:
             return nil
         }
-    }
-
-    private static func cleaned(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private struct DynamicCodingKey: CodingKey {
@@ -309,10 +301,10 @@ struct MAFavoriteMediaItem: Sendable, Identifiable {
             return nil
         }
 
-        let uri = Self.cleanedString(from: object["uri"])
+        let uri = object["uri"]?.stringValue.flatMap(cleanedString)
         let itemID = Self.identifierString(from: object["item_id"])
-        let title = Self.cleanedString(from: object["name"])
-            ?? Self.cleanedString(from: object["title"])
+        let title = object["name"]?.stringValue.flatMap(cleanedString)
+            ?? object["title"]?.stringValue.flatMap(cleanedString)
             ?? kind.placeholderTitle
         let stableComponent = uri ?? itemID ?? title
 
@@ -328,22 +320,24 @@ struct MAFavoriteMediaItem: Sendable, Identifiable {
             return nil
         }
 
-        if let stringValue = cleanedString(from: value) {
-            return stringValue
+        if let cleaned = value.stringValue.flatMap(cleanedString) {
+            return cleaned
         }
         if let intValue = value.intValue {
             return String(intValue)
         }
         return nil
     }
+}
 
-    private static func cleanedString(from value: JSONValue?) -> String? {
-        guard let stringValue = value?.stringValue else {
-            return nil
-        }
-        let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+// MARK: - Shared Utilities
+
+func cleanedString(_ value: String?) -> String? {
+    guard let value else {
+        return nil
     }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 enum MAConnectionState: Sendable, Equatable {

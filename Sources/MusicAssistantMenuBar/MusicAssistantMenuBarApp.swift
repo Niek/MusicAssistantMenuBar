@@ -37,6 +37,10 @@ private struct MenuPanelView: View {
         }
     }
 
+    private var isControlDisabled: Bool {
+        !store.canControl || store.isSwitchingPlayer
+    }
+
     private var transportBarColors: [Color] {
         if store.canControl && store.isTargetPlaying {
             return [
@@ -253,9 +257,12 @@ private struct MenuPanelView: View {
             } else if showPlayerSelector {
                 VStack(spacing: 6) {
                     ForEach(store.selectableTargets) { target in
-                        playerOptionButton(
+                        let selected = store.isCurrentTarget(id: target.playerID)
+                        optionButton(
+                            icon: selected ? "checkmark.circle.fill" : "circle",
+                            iconColor: selected ? Color(red: 0.22, green: 0.70, blue: 0.92) : .white.opacity(0.36),
                             title: target.resolvedName,
-                            isSelected: store.isCurrentTarget(id: target.playerID)
+                            isHighlighted: selected
                         ) {
                             store.selectTarget(id: target.playerID)
                             showPlayerSelector = false
@@ -294,16 +301,18 @@ private struct MenuPanelView: View {
         .contentShape(Rectangle())
     }
 
-    private func playerOptionButton(
+    private func optionButton(
+        icon: String,
+        iconColor: Color,
         title: String,
-        isSelected: Bool,
+        isHighlighted: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: icon)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color(red: 0.22, green: 0.70, blue: 0.92) : .white.opacity(0.36))
+                    .foregroundStyle(iconColor)
 
                 Text(title)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -317,10 +326,10 @@ private struct MenuPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.10) : Color.white.opacity(0.04))
+                    .fill(isHighlighted ? Color.white.opacity(0.10) : Color.white.opacity(0.04))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(isSelected ? Color.white.opacity(0.14) : Color.white.opacity(0.06), lineWidth: 1)
+                            .stroke(isHighlighted ? Color.white.opacity(0.14) : Color.white.opacity(0.06), lineWidth: 1)
                     )
             )
         }
@@ -358,8 +367,8 @@ private struct MenuPanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!store.canControl || store.isSwitchingPlayer)
-            .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.45)
+            .disabled(isControlDisabled)
+            .opacity(isControlDisabled ? 0.45 : 1)
 
             Rectangle()
                 .fill(Color.white.opacity(0.22))
@@ -403,8 +412,8 @@ private struct MenuPanelView: View {
                     nowPlayingCardHeader(showChevron: true)
                 }
                 .buttonStyle(.plain)
-                .disabled(!store.canControl || store.isSwitchingPlayer)
-                .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.72)
+                .disabled(isControlDisabled)
+                .opacity(isControlDisabled ? 0.72 : 1)
             } else {
                 nowPlayingCardHeader(showChevron: false)
             }
@@ -473,46 +482,18 @@ private struct MenuPanelView: View {
                 .textCase(.uppercase)
 
             ForEach(items) { item in
-                favoriteOptionButton(item: item) {
+                optionButton(
+                    icon: item.kind.iconName,
+                    iconColor: Color(red: 0.22, green: 0.70, blue: 0.92),
+                    title: item.title
+                ) {
                     store.playFavoriteItem(item)
                     showFavoriteSelector = false
                 }
+                .disabled(isControlDisabled)
+                .opacity(isControlDisabled ? 0.45 : 1)
             }
         }
-    }
-
-    private func favoriteOptionButton(
-        item: MAFavoriteMediaItem,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: item.kind.iconName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.22, green: 0.70, blue: 0.92))
-
-                Text(item.title)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!store.canControl || store.isSwitchingPlayer)
-        .opacity((store.canControl && !store.isSwitchingPlayer) ? 1 : 0.45)
     }
 
     @ViewBuilder
@@ -579,7 +560,7 @@ private struct MenuPanelView: View {
                 in: 0...100,
                 step: 1
             )
-            .disabled(!store.canControl || store.isSwitchingPlayer)
+            .disabled(isControlDisabled)
             .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
         }
         .cardBackground()
