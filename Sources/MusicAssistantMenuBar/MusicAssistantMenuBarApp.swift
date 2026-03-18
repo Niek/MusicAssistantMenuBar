@@ -25,6 +25,7 @@ private struct MenuPanelView: View {
     @State private var showSettings = false
     @State private var showPlayerSelector = false
     @State private var showFavoriteSelector = false
+    @State private var showIndividualVolumeTargets = false
 
     private var statusColor: Color {
         switch store.connectionState {
@@ -116,6 +117,13 @@ private struct MenuPanelView: View {
             if !canControl {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     showFavoriteSelector = false
+                }
+            }
+        }
+        .onChange(of: store.hasIndividualVolumeTargets) { hasIndividualVolumeTargets in
+            if !hasIndividualVolumeTargets {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showIndividualVolumeTargets = false
                 }
             }
         }
@@ -540,16 +548,18 @@ private struct MenuPanelView: View {
     }
 
     private var volumeCard: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text("Volume")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.84))
-                Spacer()
-                Text("\(Int(store.sliderVolume))%")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: showIndividualVolumeTargets ? 12 : 9) {
+            if store.hasIndividualVolumeTargets {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showIndividualVolumeTargets.toggle()
+                    }
+                } label: {
+                    volumeCardHeader(showChevron: true)
+                }
+                .buttonStyle(.plain)
+            } else {
+                volumeCardHeader(showChevron: false)
             }
 
             Slider(
@@ -562,8 +572,89 @@ private struct MenuPanelView: View {
             )
             .disabled(isControlDisabled)
             .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
+
+            if showIndividualVolumeTargets {
+                individualVolumeTargetsView
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         .cardBackground()
+    }
+
+    private func volumeCardHeader(showChevron: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text("Volume")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.84))
+
+            Spacer(minLength: 0)
+
+            Text("\(Int(store.sliderVolume))%")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+
+            if showChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.74))
+                    .rotationEffect(.degrees(showIndividualVolumeTargets ? 180 : 0))
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var individualVolumeTargetsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Targets")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.56))
+                .textCase(.uppercase)
+
+            ForEach(store.individualVolumeTargets) { target in
+                individualVolumeTargetRow(target)
+            }
+        }
+    }
+
+    private func individualVolumeTargetRow(_ target: IndividualVolumeTarget) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(target.name)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Text(target.volumeText)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(target.isAdjustable ? 0.84 : 0.48))
+            }
+
+            Slider(
+                value: Binding(
+                    get: { target.volume },
+                    set: { store.setIndividualVolume($0, for: target.playerID) }
+                ),
+                in: 0...100,
+                step: 1
+            )
+            .disabled(isControlDisabled || !target.isAdjustable)
+            .tint(Color(red: 0.22, green: 0.70, blue: 0.92))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                )
+        )
+        .opacity(target.isAdjustable ? 1 : 0.7)
     }
 
     @ViewBuilder

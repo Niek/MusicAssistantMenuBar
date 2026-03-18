@@ -101,6 +101,44 @@ final class TargetSelectionTests: XCTestCase {
         XCTAssertNil(resolution.target)
     }
 
+    func testIndividualVolumeTargetsFollowDeclaredGroupMemberOrder() {
+        let leader = player(
+            id: "leader",
+            name: "Living Room",
+            groupMembers: ["leader", "kitchen", "bedroom"]
+        )
+        let kitchen = player(id: "kitchen", name: "Kitchen")
+        let bedroom = player(id: "bedroom", name: "Bedroom")
+
+        let targets = PlayerStore.resolveIndividualVolumeTargets(
+            playersByID: [
+                leader.playerID: leader,
+                kitchen.playerID: kitchen,
+                bedroom.playerID: bedroom
+            ],
+            target: leader
+        )
+
+        XCTAssertEqual(targets.map(\.playerID), ["leader", "kitchen", "bedroom"])
+    }
+
+    func testIndividualVolumeTargetsFallbackToSyncedMembersWhenGroupMembersMissing() {
+        let leader = player(id: "leader", name: "Living Room")
+        let kitchen = player(id: "kitchen", name: "Kitchen", syncedTo: "leader")
+        let bedroom = player(id: "bedroom", name: "Bedroom", syncedTo: "leader")
+
+        let targets = PlayerStore.resolveIndividualVolumeTargets(
+            playersByID: [
+                leader.playerID: leader,
+                kitchen.playerID: kitchen,
+                bedroom.playerID: bedroom
+            ],
+            target: leader
+        )
+
+        XCTAssertEqual(targets.map(\.playerID), ["leader", "bedroom", "kitchen"])
+    }
+
     private func player(
         id: String,
         name: String,
@@ -109,7 +147,8 @@ final class TargetSelectionTests: XCTestCase {
         playbackState: String? = "idle",
         syncedTo: String? = nil,
         volumeLevel: Int? = 24,
-        groupVolume: Int? = nil
+        groupVolume: Int? = nil,
+        groupMembers: [String]? = nil
     ) -> MAPlayer {
         MAPlayer(
             playerID: id,
@@ -122,6 +161,7 @@ final class TargetSelectionTests: XCTestCase {
             syncedTo: syncedTo,
             volumeLevel: volumeLevel,
             groupVolume: groupVolume,
+            groupMembers: groupMembers,
             supportedFeatures: nil,
             currentMedia: nil
         )

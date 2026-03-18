@@ -36,6 +36,7 @@ struct MAPlayer: Sendable, Codable, Identifiable {
     let syncedTo: String?
     let volumeLevel: Int?
     let groupVolume: Int?
+    let groupMembers: [String]?
     let supportedFeatures: [String]?
     let currentMedia: MACurrentMedia?
 
@@ -90,6 +91,10 @@ struct MAPlayer: Sendable, Codable, Identifiable {
         volumeLevel ?? groupVolume
     }
 
+    var groupMemberIDs: [String] {
+        groupMembers ?? []
+    }
+
     var nowPlayingLine: String? {
         currentMedia?.displayLine
     }
@@ -105,6 +110,7 @@ struct MAPlayer: Sendable, Codable, Identifiable {
         case syncedTo = "synced_to"
         case volumeLevel = "volume_level"
         case groupVolume = "group_volume"
+        case groupMembers = "group_members"
         case supportedFeatures = "supported_features"
         case currentMedia = "current_media"
     }

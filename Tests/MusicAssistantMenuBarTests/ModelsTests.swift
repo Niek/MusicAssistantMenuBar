@@ -63,6 +63,24 @@ final class ModelsTests: XCTestCase {
         XCTAssertFalse(unavailablePlayer.isSelectableTarget)
     }
 
+    func testPlayerDecodingIncludesGroupMembers() throws {
+        let player = try JSONValueDecoder.decode(
+            MAPlayer.self,
+            from: .object([
+                "player_id": .string("everywhere"),
+                "display_name": .string("Everywhere"),
+                "available": .bool(true),
+                "playback_state": .string("idle"),
+                "group_members": .array([
+                    .string("living-room"),
+                    .string("kitchen")
+                ])
+            ])
+        )
+
+        XCTAssertEqual(player.groupMemberIDs, ["living-room", "kitchen"])
+    }
+
     func testCurrentMediaDisplayLineFormatsArtistAndTitle() {
         let full = MACurrentMedia(title: "Track", name: nil, artist: "Artist", artworkURLString: nil)
         XCTAssertEqual(full.displayLine, "Artist - Track")
@@ -147,7 +165,8 @@ final class ModelsTests: XCTestCase {
         state: String? = nil,
         syncedTo: String? = nil,
         volumeLevel: Int? = 24,
-        groupVolume: Int? = nil
+        groupVolume: Int? = nil,
+        groupMembers: [String]? = nil
     ) -> MAPlayer {
         MAPlayer(
             playerID: id,
@@ -160,6 +179,7 @@ final class ModelsTests: XCTestCase {
             syncedTo: syncedTo,
             volumeLevel: volumeLevel,
             groupVolume: groupVolume,
+            groupMembers: groupMembers,
             supportedFeatures: nil,
             currentMedia: nil
         )

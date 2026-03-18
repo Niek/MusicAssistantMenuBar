@@ -20,6 +20,7 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var isSwitchingPlayer = false
     @Published private(set) var favoritePlaylists: [MAFavoriteMediaItem] = []
     @Published private(set) var favoriteAlbums: [MAFavoriteMediaItem] = []
+    @Published private(set) var individualVolumeTargets: [IndividualVolumeTarget] = []
     @Published var sliderVolume: Double = 0
 
     @Published var apiHostInput: String
@@ -35,6 +36,8 @@ final class PlayerStore: ObservableObject {
     private var lastSuccessfulTargetID: String?
 
     private var volumeSendTask: Task<Void, Never>?
+    private var individualVolumeSendTasks: [String: Task<Void, Never>] = [:]
+    private var pendingIndividualVolumes: [String: Double] = [:]
     private var mediaKeyMonitor: MediaKeyMonitor?
 
     private var discovery = BonjourDiscovery()
@@ -62,6 +65,10 @@ final class PlayerStore: ObservableObject {
             playlists: favoritePlaylists,
             albums: favoriteAlbums
         )
+    }
+
+    var hasIndividualVolumeTargets: Bool {
+        individualVolumeTargets.count > 1
     }
 
     private var mediaKeyPermissionWarningText: String {
@@ -311,34 +318,86 @@ final class PlayerStore: ObservableObject {
     }
 
     func setVolume(_ newValue: Double) {
+        guard let target = resolveCurrentTarget() else { return }
+
         let clamped = min(max(newValue.rounded(), 0), 100)
         guard sliderVolume != clamped else { return }
         sliderVolume = clamped
 
         volumeSendTask?.cancel()
         let level = Int(sliderVolume)
+        let playerID = target.playerID
+        let command = target.isGroupLike ? "players/cmd/group_volume" : "players/cmd/volume_set"
         volumeSendTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
-            await self?.sendVolume(level)
+            guard !Task.isCancelled else { return }
+            await self?.sendVolume(level, playerID: playerID, command: command)
         }
     }
 
-    private func sendVolume(_ level: Int) async {
-        guard let (target, client) = requireTargetAndClient() else { return }
+    func setIndividualVolume(_ newValue: Double, for playerID: String) {
+        guard let existingTarget = individualVolumeTargets.first(where: { $0.playerID == playerID }) else {
+            return
+        }
 
-        let command = target.isGroupLike ? "players/cmd/group_volume" : "players/cmd/volume_set"
+        let clamped = min(max(newValue.rounded(), 0), 100)
+        guard existingTarget.volume != clamped else { return }
+
+        pendingIndividualVolumes[playerID] = clamped
+        rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
+
+        individualVolumeSendTasks[playerID]?.cancel()
+        let level = Int(clamped)
+        individualVolumeSendTasks[playerID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.sendIndividualVolume(level, playerID: playerID)
+        }
+    }
+
+    private func sendVolume(_ level: Int, playerID: String, command: String) async {
+        guard let client else {
+            errorText = "Configure API host and token first"
+            return
+        }
 
         do {
             _ = try await client.send(
                 command: command,
                 args: [
-                    "player_id": .string(target.playerID),
+                    "player_id": .string(playerID),
                     "volume_level": .integer(level)
                 ]
             )
-            lastSuccessfulTargetID = target.playerID
+            if currentTargetID == playerID {
+                lastSuccessfulTargetID = playerID
+            }
             errorText = nil
         } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func sendIndividualVolume(_ level: Int, playerID: String) async {
+        guard let client else {
+            pendingIndividualVolumes.removeValue(forKey: playerID)
+            rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
+            errorText = "Configure API host and token first"
+            return
+        }
+
+        do {
+            _ = try await client.send(
+                command: "players/cmd/volume_set",
+                args: [
+                    "player_id": .string(playerID),
+                    "volume_level": .integer(level)
+                ]
+            )
+            errorText = nil
+        } catch {
+            pendingIndividualVolumes.removeValue(forKey: playerID)
+            rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
             errorText = error.localizedDescription
         }
     }
@@ -478,6 +537,9 @@ final class PlayerStore: ObservableObject {
 
     private func removePlayer(withID playerID: String) {
         playersByID.removeValue(forKey: playerID)
+        individualVolumeSendTasks[playerID]?.cancel()
+        individualVolumeSendTasks.removeValue(forKey: playerID)
+        pendingIndividualVolumes.removeValue(forKey: playerID)
         if currentTargetID == playerID {
             currentTargetID = nil
         }
@@ -495,6 +557,7 @@ final class PlayerStore: ObservableObject {
         currentTargetID = target?.playerID
 
         applyTargetPresentation(target)
+        rebuildIndividualVolumeTargets(for: target)
 
         if let volume = target?.effectiveVolume {
             let newVolume = Double(volume)
@@ -536,6 +599,34 @@ final class PlayerStore: ObservableObject {
             playPauseTitle = "Play/Pause"
             playPauseIconName = "playpause.fill"
         }
+    }
+
+    private func rebuildIndividualVolumeTargets(for target: MAPlayer?) {
+        var targets: [IndividualVolumeTarget] = []
+
+        for player in Self.resolveIndividualVolumeTargets(playersByID: playersByID, target: target) {
+            let liveVolume = player.effectiveVolume
+
+            if
+                let pendingVolume = pendingIndividualVolumes[player.playerID],
+                let liveVolume,
+                Double(liveVolume) == pendingVolume
+            {
+                pendingIndividualVolumes.removeValue(forKey: player.playerID)
+            }
+
+            let displayVolume = pendingIndividualVolumes[player.playerID] ?? Double(liveVolume ?? 0)
+            targets.append(
+                IndividualVolumeTarget(
+                    playerID: player.playerID,
+                    name: player.resolvedName,
+                    volume: displayVolume,
+                    isAdjustable: player.isAvailable && liveVolume != nil
+                )
+            )
+        }
+
+        individualVolumeTargets = targets
     }
 
     private func nowPlayingLine(for target: MAPlayer?) -> String {
@@ -747,6 +838,51 @@ final class PlayerStore: ObservableObject {
         )
     }
 
+    nonisolated static func resolveIndividualVolumeTargets(
+        playersByID: [String: MAPlayer],
+        target: MAPlayer?
+    ) -> [MAPlayer] {
+        guard let target else {
+            return []
+        }
+
+        if !target.groupMemberIDs.isEmpty {
+            guard target.groupMemberIDs.count > 1 else {
+                return []
+            }
+
+            var seen = Set<String>()
+            return target.groupMemberIDs.compactMap { memberID in
+                guard seen.insert(memberID).inserted else {
+                    return nil
+                }
+
+                if memberID == target.playerID {
+                    return target
+                }
+
+                return playersByID[memberID]
+            }
+        }
+
+        let syncedMembers = playersByID.values
+            .filter { $0.syncedTo == target.playerID }
+            .sorted {
+                let lhs = ($0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName), $0.playerID)
+                return lhs.0 == .orderedAscending || (lhs.0 == .orderedSame && lhs.1 < $1.playerID)
+            }
+
+        guard !syncedMembers.isEmpty else {
+            return []
+        }
+
+        if (target.type ?? "").lowercased() == "group" {
+            return syncedMembers.count > 1 ? syncedMembers : []
+        }
+
+        return syncedMembers.count + 1 > 1 ? [target] + syncedMembers : []
+    }
+
     nonisolated static func hasFavoriteMediaItems(
         playlists: [MAFavoriteMediaItem],
         albums: [MAFavoriteMediaItem]
@@ -844,4 +980,17 @@ final class PlayerStore: ObservableObject {
 struct TargetSelectionResolution {
     let target: MAPlayer?
     let selectableTargets: [MAPlayer]
+}
+
+struct IndividualVolumeTarget: Identifiable {
+    let playerID: String
+    let name: String
+    let volume: Double
+    let isAdjustable: Bool
+
+    var id: String { playerID }
+
+    var volumeText: String {
+        isAdjustable ? "\(Int(volume))%" : "--"
+    }
 }
