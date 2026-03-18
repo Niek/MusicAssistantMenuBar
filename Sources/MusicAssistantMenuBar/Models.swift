@@ -10,7 +10,7 @@ enum MAInboundMessage: Sendable {
     case hello(MAServerHello)
     case result(messageID: String, result: JSONValue?, partial: Bool)
     case error(messageID: String, code: Int, details: String)
-    case event(name: String, data: JSONValue?)
+    case event(name: String, objectID: String?, data: JSONValue?)
 }
 
 struct MAServerHello: Sendable, Decodable {
@@ -363,6 +363,7 @@ struct MAInboundEnvelope: Decodable {
     let errorCode: Int?
     let details: String?
     let event: String?
+    let objectID: String?
     let data: JSONValue?
 
     private enum CodingKeys: String, CodingKey {
@@ -375,6 +376,7 @@ struct MAInboundEnvelope: Decodable {
         case errorCode = "error_code"
         case details
         case event
+        case objectID = "object_id"
         case data
     }
 }

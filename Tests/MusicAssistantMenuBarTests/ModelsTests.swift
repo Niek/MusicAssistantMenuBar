@@ -155,6 +155,66 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(placeholderFallback?.title, "Untitled Album")
     }
 
+    func testFavoriteMediaRefreshEventMatchesPlaylistAndAlbumUpdates() {
+        XCTAssertTrue(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: nil,
+                data: .object(["media_type": .string("playlist")])
+            )
+        )
+
+        XCTAssertTrue(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: nil,
+                data: .object(["media_type": .string("album")])
+            )
+        )
+
+        XCTAssertFalse(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: nil,
+                data: .object(["media_type": .string("track")])
+            )
+        )
+
+        XCTAssertFalse(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "player_updated",
+                objectID: nil,
+                data: .object(["media_type": .string("playlist")])
+            )
+        )
+    }
+
+    func testFavoriteMediaRefreshEventFallsBackToObjectIDWhenMediaTypeMissing() {
+        XCTAssertTrue(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: "library://playlist/42",
+                data: .object([:])
+            )
+        )
+
+        XCTAssertTrue(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: "library://album/99",
+                data: nil
+            )
+        )
+
+        XCTAssertFalse(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                eventName: "media_item_updated",
+                objectID: "library://track/13",
+                data: nil
+            )
+        )
+    }
+
     private func makePlayer(
         id: String,
         displayName: String?,

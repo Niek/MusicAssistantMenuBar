@@ -38,6 +38,8 @@ final class PlayerStore: ObservableObject {
     private var volumeSendTask: Task<Void, Never>?
     private var individualVolumeSendTasks: [String: Task<Void, Never>] = [:]
     private var pendingIndividualVolumes: [String: Double] = [:]
+    private var favoriteMediaRefreshTask: Task<Void, Never>?
+    private var favoriteMediaRefreshPending = false
     private var mediaKeyMonitor: MediaKeyMonitor?
 
     private var discovery = BonjourDiscovery()
@@ -910,8 +912,8 @@ final class PlayerStore: ObservableObject {
             }
             Task {
                 async let playersRefresh: Void = refreshPlayers()
-                async let favoritesRefresh: Void = refreshFavoriteMedia()
-                _ = await (playersRefresh, favoritesRefresh)
+                requestFavoriteMediaRefresh()
+                _ = await playersRefresh
             }
         case let .disconnected(reason):
             connectionText = "Disconnected"
@@ -929,8 +931,8 @@ final class PlayerStore: ObservableObject {
         switch message {
         case .hello:
             return
-        case let .event(name, data):
-            handleEvent(name: name, data: data)
+        case let .event(name, objectID, data):
+            handleEvent(name: name, objectID: objectID, data: data)
         case let .error(_, _, details):
             errorText = details
         case .result:
@@ -938,7 +940,7 @@ final class PlayerStore: ObservableObject {
         }
     }
 
-    private func handleEvent(name: String, data: JSONValue?) {
+    private func handleEvent(name: String, objectID: String?, data: JSONValue?) {
         switch name {
         case "player_added", "player_updated":
             guard let data else {
@@ -955,8 +957,33 @@ final class PlayerStore: ObservableObject {
                 return
             }
             removePlayer(withID: playerID)
+        case "media_item_updated":
+            guard Self.shouldRefreshFavoriteMedia(eventName: name, objectID: objectID, data: data) else {
+                return
+            }
+            requestFavoriteMediaRefresh()
         default:
             return
+        }
+    }
+
+    private func requestFavoriteMediaRefresh() {
+        if favoriteMediaRefreshTask != nil {
+            favoriteMediaRefreshPending = true
+            return
+        }
+
+        favoriteMediaRefreshTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            repeat {
+                self.favoriteMediaRefreshPending = false
+                await self.refreshFavoriteMedia()
+            } while self.favoriteMediaRefreshPending
+
+            self.favoriteMediaRefreshTask = nil
         }
     }
 
@@ -971,6 +998,65 @@ final class PlayerStore: ObservableObject {
 
         if let object = value.objectValue {
             return object["player_id"]?.stringValue
+        }
+
+        return nil
+    }
+
+    nonisolated static func shouldRefreshFavoriteMedia(
+        eventName: String,
+        objectID: String?,
+        data: JSONValue?
+    ) -> Bool {
+        guard eventName == "media_item_updated" else {
+            return false
+        }
+
+        if let kind = favoriteMediaKind(from: data) {
+            return kind == .playlist || kind == .album
+        }
+
+        if let kind = favoriteMediaKind(fromURI: objectID) {
+            return kind == .playlist || kind == .album
+        }
+
+        return false
+    }
+
+    nonisolated private static func favoriteMediaKind(from value: JSONValue?) -> MAFavoriteMediaKind? {
+        guard let object = value?.objectValue else {
+            return nil
+        }
+
+        if let rawMediaType = object["media_type"]?.stringValue?.lowercased() {
+            switch rawMediaType {
+            case "playlist":
+                return .playlist
+            case "album":
+                return .album
+            default:
+                break
+            }
+        }
+
+        return favoriteMediaKind(fromURI: object["uri"]?.stringValue)
+    }
+
+    nonisolated private static func favoriteMediaKind(fromURI uri: String?) -> MAFavoriteMediaKind? {
+        guard let uri else {
+            return nil
+        }
+
+        let normalized = uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else {
+            return nil
+        }
+
+        if normalized.contains("playlist") {
+            return .playlist
+        }
+        if normalized.contains("album") {
+            return .album
         }
 
         return nil

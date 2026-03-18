@@ -242,7 +242,7 @@ actor MAWebSocketClient {
         }
 
         if let event = envelope.event {
-            onMessage(.event(name: event, data: envelope.data))
+            onMessage(.event(name: event, objectID: envelope.objectID, data: envelope.data))
         }
     }
 
