@@ -156,62 +156,38 @@ final class ModelsTests: XCTestCase {
     }
 
     func testFavoriteMediaRefreshEventMatchesPlaylistAndAlbumUpdates() {
-        XCTAssertTrue(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: nil,
-                data: .object(["media_type": .string("playlist")])
-            )
+        assertFavoriteMediaRefresh(
+            expected: true,
+            objectID: nil,
+            data: .object(["media_type": .string("playlist")])
         )
-
-        XCTAssertTrue(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: nil,
-                data: .object(["media_type": .string("album")])
-            )
+        assertFavoriteMediaRefresh(
+            expected: true,
+            objectID: nil,
+            data: .object(["media_type": .string("album")])
         )
-
-        XCTAssertFalse(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: nil,
-                data: .object(["media_type": .string("track")])
-            )
-        )
-
-        XCTAssertFalse(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "player_updated",
-                objectID: nil,
-                data: .object(["media_type": .string("playlist")])
-            )
+        assertFavoriteMediaRefresh(
+            expected: false,
+            objectID: nil,
+            data: .object(["media_type": .string("track")])
         )
     }
 
     func testFavoriteMediaRefreshEventFallsBackToObjectIDWhenMediaTypeMissing() {
-        XCTAssertTrue(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: "library://playlist/42",
-                data: .object([:])
-            )
+        assertFavoriteMediaRefresh(
+            expected: true,
+            objectID: "library://playlist/42",
+            data: .object([:])
         )
-
-        XCTAssertTrue(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: "library://album/99",
-                data: nil
-            )
+        assertFavoriteMediaRefresh(
+            expected: true,
+            objectID: "library://album/99",
+            data: nil
         )
-
-        XCTAssertFalse(
-            PlayerStore.shouldRefreshFavoriteMedia(
-                eventName: "media_item_updated",
-                objectID: "library://track/13",
-                data: nil
-            )
+        assertFavoriteMediaRefresh(
+            expected: false,
+            objectID: "library://track/13",
+            data: nil
         )
     }
 
@@ -242,6 +218,24 @@ final class ModelsTests: XCTestCase {
             groupMembers: groupMembers,
             supportedFeatures: nil,
             currentMedia: nil
+        )
+    }
+
+    private func assertFavoriteMediaRefresh(
+        expected: Bool,
+        objectID: String?,
+        data: JSONValue?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            PlayerStore.shouldRefreshFavoriteMedia(
+                objectID: objectID,
+                data: data
+            ),
+            expected,
+            file: file,
+            line: line
         )
     }
 }

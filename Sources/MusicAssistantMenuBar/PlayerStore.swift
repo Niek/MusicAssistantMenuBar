@@ -549,10 +549,7 @@ final class PlayerStore: ObservableObject {
     }
 
     private func updateTargetAndUI() {
-        let resolution = Self.resolveSelectableTargets(
-            players: Array(playersByID.values),
-            lastSuccessfulTargetID: lastSuccessfulTargetID
-        )
+        let resolution = currentTargetResolution()
         let target = resolution.target
 
         selectableTargets = resolution.selectableTargets
@@ -574,10 +571,14 @@ final class PlayerStore: ObservableObject {
             return existing
         }
 
-        return Self.resolveSelectableTargets(
+        return currentTargetResolution().target
+    }
+
+    private func currentTargetResolution() -> TargetSelectionResolution {
+        Self.resolveSelectableTargets(
             players: Array(playersByID.values),
             lastSuccessfulTargetID: lastSuccessfulTargetID
-        ).target
+        )
     }
 
     private func applyTargetPresentation(_ target: MAPlayer?) {
@@ -824,10 +825,7 @@ final class PlayerStore: ObservableObject {
     ) -> TargetSelectionResolution {
         let selectableTargets = players
             .filter(\.isSelectableTarget)
-            .sorted {
-                let lhs = ($0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName), $0.playerID)
-                return lhs.0 == .orderedAscending || (lhs.0 == .orderedSame && lhs.1 < $1.playerID)
-            }
+            .sorted(by: arePlayersOrderedForDisplay)
 
         let playingTargets = selectableTargets.filter(\.isPlaying)
         let preferredTarget = playingTargets.first(where: \.isGroupLike)
@@ -869,10 +867,7 @@ final class PlayerStore: ObservableObject {
 
         let syncedMembers = playersByID.values
             .filter { $0.syncedTo == target.playerID }
-            .sorted {
-                let lhs = ($0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName), $0.playerID)
-                return lhs.0 == .orderedAscending || (lhs.0 == .orderedSame && lhs.1 < $1.playerID)
-            }
+            .sorted(by: arePlayersOrderedForDisplay)
 
         guard !syncedMembers.isEmpty else {
             return []
@@ -882,7 +877,12 @@ final class PlayerStore: ObservableObject {
             return syncedMembers.count > 1 ? syncedMembers : []
         }
 
-        return syncedMembers.count + 1 > 1 ? [target] + syncedMembers : []
+        return [target] + syncedMembers
+    }
+
+    nonisolated private static func arePlayersOrderedForDisplay(_ lhs: MAPlayer, _ rhs: MAPlayer) -> Bool {
+        let comparison = lhs.resolvedName.localizedCaseInsensitiveCompare(rhs.resolvedName)
+        return comparison == .orderedAscending || (comparison == .orderedSame && lhs.playerID < rhs.playerID)
     }
 
     nonisolated static func hasFavoriteMediaItems(
@@ -958,7 +958,7 @@ final class PlayerStore: ObservableObject {
             }
             removePlayer(withID: playerID)
         case "media_item_updated":
-            guard Self.shouldRefreshFavoriteMedia(eventName: name, objectID: objectID, data: data) else {
+            guard Self.shouldRefreshFavoriteMedia(objectID: objectID, data: data) else {
                 return
             }
             requestFavoriteMediaRefresh()
@@ -968,8 +968,8 @@ final class PlayerStore: ObservableObject {
     }
 
     private func requestFavoriteMediaRefresh() {
-        if favoriteMediaRefreshTask != nil {
-            favoriteMediaRefreshPending = true
+        favoriteMediaRefreshPending = true
+        guard favoriteMediaRefreshTask == nil else {
             return
         }
 
@@ -978,12 +978,14 @@ final class PlayerStore: ObservableObject {
                 return
             }
 
-            repeat {
+            defer {
+                self.favoriteMediaRefreshTask = nil
+            }
+
+            while self.favoriteMediaRefreshPending {
                 self.favoriteMediaRefreshPending = false
                 await self.refreshFavoriteMedia()
-            } while self.favoriteMediaRefreshPending
-
-            self.favoriteMediaRefreshTask = nil
+            }
         }
     }
 
@@ -1004,23 +1006,11 @@ final class PlayerStore: ObservableObject {
     }
 
     nonisolated static func shouldRefreshFavoriteMedia(
-        eventName: String,
         objectID: String?,
         data: JSONValue?
     ) -> Bool {
-        guard eventName == "media_item_updated" else {
-            return false
-        }
-
-        if let kind = favoriteMediaKind(from: data) {
-            return kind == .playlist || kind == .album
-        }
-
-        if let kind = favoriteMediaKind(fromURI: objectID) {
-            return kind == .playlist || kind == .album
-        }
-
-        return false
+        return favoriteMediaKind(from: data) != nil
+            || favoriteMediaKind(fromURI: objectID) != nil
     }
 
     nonisolated private static func favoriteMediaKind(from value: JSONValue?) -> MAFavoriteMediaKind? {
@@ -1028,18 +1018,22 @@ final class PlayerStore: ObservableObject {
             return nil
         }
 
-        if let rawMediaType = object["media_type"]?.stringValue?.lowercased() {
-            switch rawMediaType {
-            case "playlist":
-                return .playlist
-            case "album":
-                return .album
-            default:
-                break
-            }
+        if let mediaKind = favoriteMediaKind(fromMediaType: object["media_type"]?.stringValue) {
+            return mediaKind
         }
 
         return favoriteMediaKind(fromURI: object["uri"]?.stringValue)
+    }
+
+    nonisolated private static func favoriteMediaKind(fromMediaType mediaType: String?) -> MAFavoriteMediaKind? {
+        switch mediaType?.lowercased() {
+        case "playlist":
+            return .playlist
+        case "album":
+            return .album
+        default:
+            return nil
+        }
     }
 
     nonisolated private static func favoriteMediaKind(fromURI uri: String?) -> MAFavoriteMediaKind? {
