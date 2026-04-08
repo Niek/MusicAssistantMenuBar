@@ -5,16 +5,9 @@ import Foundation
 @MainActor
 final class PlayerStore: ObservableObject {
     @Published private(set) var connectionState: MAConnectionState = .disconnected(reason: nil)
-    @Published private(set) var connectionText = "Disconnected"
-    @Published private(set) var statusSymbolName = "bolt.slash"
-    @Published private(set) var targetText = "No active target"
-    @Published private(set) var nowPlayingText = "Nothing playing"
+    @Published private(set) var isSetupRequired = false
+    @Published private(set) var currentTarget: MAPlayer?
     @Published private(set) var nowPlayingArtworkURL: URL?
-    @Published private(set) var playPauseTitle = "Play/Pause"
-    @Published private(set) var playPauseIconName = "playpause.fill"
-    @Published private(set) var isTargetPlaying = false
-    @Published private(set) var canControl = false
-    @Published private(set) var canSkipTrack = false
     @Published private(set) var errorText: String?
     @Published private(set) var mediaKeyCaptureWarning: String?
     @Published private(set) var isSwitchingPlayer = false
@@ -32,7 +25,6 @@ final class PlayerStore: ObservableObject {
     @Published private(set) var settingsCollapseToken = 0
 
     private var playersByID: [String: MAPlayer] = [:]
-    private var currentTargetID: String?
     private var lastSuccessfulTargetID: String?
 
     private var volumeSendTask: Task<Void, Never>?
@@ -49,33 +41,42 @@ final class PlayerStore: ObservableObject {
 
     private let favoriteMediaLimit = 10
     private let playNowQueueOption = "replace"
-
-    var isConnected: Bool {
-        connectionState == .connected
-    }
-
-    var canSaveSettings: Bool {
-        configurationFromInputs != nil
-    }
-
-    var canChoosePlayer: Bool {
-        isConnected && selectableTargets.count > 1 && !isSwitchingPlayer
-    }
-
-    var hasFavoriteMediaItems: Bool {
-        Self.hasFavoriteMediaItems(
-            playlists: favoritePlaylists,
-            albums: favoriteAlbums
-        )
-    }
-
-    var hasIndividualVolumeTargets: Bool {
-        individualVolumeTargets.count > 1
-    }
-
-    private var mediaKeyPermissionWarningText: String {
+    private let mediaKeyPermissionWarningText =
         "Enable Accessibility/Input Monitoring for this app to fully capture Play/Pause and prevent Apple Music from opening."
+
+    var isConnected: Bool { connectionState == .connected }
+
+    var connectionText: String {
+        switch (isSetupRequired, connectionState) {
+        case (true, _): "Setup required"
+        case (_, .connecting): "Connecting"
+        case (_, .authenticating): "Authenticating"
+        case (_, .connected): "Connected"
+        case (_, .disconnected): "Disconnected"
+        }
     }
+
+    var statusSymbolName: String {
+        switch (isSetupRequired, connectionState) {
+        case (true, _): "slider.horizontal.3"
+        case (_, .connecting): "arrow.triangle.2.circlepath"
+        case (_, .authenticating): "lock.shield"
+        case (_, .connected): "dot.radiowaves.left.and.right"
+        case (_, .disconnected): "bolt.slash"
+        }
+    }
+
+    var canSaveSettings: Bool { configurationFromInputs != nil }
+    var canControl: Bool { currentTarget != nil && isConnected }
+    var canChoosePlayer: Bool { isConnected && selectableTargets.count > 1 && !isSwitchingPlayer }
+    var canSkipTrack: Bool { (currentTarget?.supportsNextPrevious ?? false) && isConnected }
+    var hasFavoriteMediaItems: Bool { Self.hasFavoriteMediaItems(playlists: favoritePlaylists, albums: favoriteAlbums) }
+    var hasIndividualVolumeTargets: Bool { individualVolumeTargets.count > 1 }
+    var targetText: String { currentTarget?.resolvedName ?? "No active target" }
+    var nowPlayingText: String { currentTarget?.nowPlayingLine ?? (currentTarget?.isPlaying == true ? "Playing" : "Nothing playing") }
+    var isTargetPlaying: Bool { currentTarget?.isPlaying ?? false }
+    var playPauseTitle: String { currentTarget.map { $0.isPlaying ? "Pause" : "Play" } ?? "Play/Pause" }
+    var playPauseIconName: String { currentTarget.map { $0.isPlaying ? "pause.fill" : "play.fill" } ?? "playpause.fill" }
 
     init() {
         apiHostInput = AppConfig.loadHost()
@@ -201,7 +202,7 @@ final class PlayerStore: ObservableObject {
             return
         }
 
-        guard currentTargetID != id else {
+        guard currentTarget?.playerID != id else {
             return
         }
 
@@ -211,43 +212,24 @@ final class PlayerStore: ObservableObject {
     }
 
     func isCurrentTarget(id: String) -> Bool {
-        currentTargetID == id
+        currentTarget?.playerID == id
     }
 
     func togglePlayPause() {
-        guard let (target, client) = requireTargetAndClient() else { return }
-
-        Task {
-            await sendTransportCommand(
-                queueCommand: "player_queues/play_pause",
-                playerCommands: playbackFallbackCommands(for: target),
-                playerID: target.playerID,
-                client: client
-            )
+        sendTransportCommand(queueCommand: "player_queues/play_pause") {
+            self.playbackFallbackCommands(for: $0)
         }
     }
 
     func previousTrack() {
-        guard let (target, client) = requireTargetAndClient() else { return }
-        Task {
-            await sendTransportCommand(
-                queueCommand: "player_queues/previous",
-                playerCommands: ["players/cmd/previous"],
-                playerID: target.playerID,
-                client: client
-            )
+        sendTransportCommand(queueCommand: "player_queues/previous") { _ in
+            ["players/cmd/previous"]
         }
     }
 
     func nextTrack() {
-        guard let (target, client) = requireTargetAndClient() else { return }
-        Task {
-            await sendTransportCommand(
-                queueCommand: "player_queues/next",
-                playerCommands: ["players/cmd/next"],
-                playerID: target.playerID,
-                client: client
-            )
+        sendTransportCommand(queueCommand: "player_queues/next") { _ in
+            ["players/cmd/next"]
         }
     }
 
@@ -260,53 +242,31 @@ final class PlayerStore: ObservableObject {
     }
 
     private func sendTransportCommand(
-        queueCommand: String?,
-        playerCommands: [String],
-        playerID: String,
-        client: MAWebSocketClient
-    ) async {
-        if let queueCommand {
-            do {
-                _ = try await client.send(
-                    command: queueCommand,
-                    args: ["queue_id": .string(playerID)]
-                )
-                lastSuccessfulTargetID = playerID
-                errorText = nil
-                return
-            } catch {
-                if playerCommands.isEmpty {
-                    errorText = error.localizedDescription
+        queueCommand: String? = nil,
+        playerCommands: @escaping (MAPlayer) -> [String]
+    ) {
+        guard let (target, client) = requireTargetAndClient() else { return }
+
+        let playerID = target.playerID
+        let attempts: [(String, [String: JSONValue])] =
+            (queueCommand.map { [($0, ["queue_id": .string(playerID)])] } ?? [])
+            + playerCommands(target).map { ($0, ["player_id": .string(playerID)]) }
+
+        Task {
+            for (command, args) in attempts {
+                do {
+                    _ = try await client.send(command: command, args: args)
+                    completeCommand(for: playerID)
                     return
-                }
-            }
-        }
-
-        await sendPlayerCommands(commands: playerCommands, playerID: playerID, client: client)
-    }
-
-    private func sendPlayerCommands(commands: [String], playerID: String, client: MAWebSocketClient) async {
-        for command in commands {
-            do {
-                _ = try await client.send(
-                    command: command,
-                    args: ["player_id": .string(playerID)]
-                )
-                lastSuccessfulTargetID = playerID
-                errorText = nil
-                return
-            } catch {
-                // If this was the last command to try, report the error.
-                if command == commands.last {
+                } catch {
                     errorText = error.localizedDescription
                 }
-                // Otherwise try the next fallback command.
             }
         }
     }
 
     private func requireTargetAndClient() -> (MAPlayer, MAWebSocketClient)? {
-        guard let target = resolveCurrentTarget() else {
+        guard let target = currentTarget else {
             errorText = "No active target available"
             return nil
         }
@@ -319,15 +279,31 @@ final class PlayerStore: ObservableObject {
         return (target, client)
     }
 
-    func setVolume(_ newValue: Double) {
-        guard let target = resolveCurrentTarget() else { return }
+    private func completeCommand(for playerID: String? = nil) {
+        if let playerID {
+            lastSuccessfulTargetID = playerID
+        }
+        errorText = nil
+    }
 
-        let clamped = min(max(newValue.rounded(), 0), 100)
+    private func clampedVolume(_ value: Double) -> Double {
+        min(max(value.rounded(), 0), 100)
+    }
+
+    private func resetPendingVolume(for playerID: String) {
+        pendingIndividualVolumes.removeValue(forKey: playerID)
+        rebuildIndividualVolumeTargets(for: currentTarget)
+    }
+
+    func setVolume(_ newValue: Double) {
+        guard let target = currentTarget else { return }
+
+        let clamped = clampedVolume(newValue)
         guard sliderVolume != clamped else { return }
         sliderVolume = clamped
 
         volumeSendTask?.cancel()
-        let level = Int(sliderVolume)
+        let level = Int(clamped)
         let playerID = target.playerID
         let command = target.isGroupLike ? "players/cmd/group_volume" : "players/cmd/volume_set"
         volumeSendTask = Task { [weak self] in
@@ -342,23 +318,31 @@ final class PlayerStore: ObservableObject {
             return
         }
 
-        let clamped = min(max(newValue.rounded(), 0), 100)
+        let clamped = clampedVolume(newValue)
         guard existingTarget.volume != clamped else { return }
 
         pendingIndividualVolumes[playerID] = clamped
-        rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
+        rebuildIndividualVolumeTargets(for: currentTarget)
 
         individualVolumeSendTasks[playerID]?.cancel()
         let level = Int(clamped)
         individualVolumeSendTasks[playerID] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
-            await self?.sendIndividualVolume(level, playerID: playerID)
+            await self?.sendVolume(level, playerID: playerID, command: "players/cmd/volume_set", resetsPendingVolume: true)
         }
     }
 
-    private func sendVolume(_ level: Int, playerID: String, command: String) async {
+    private func sendVolume(
+        _ level: Int,
+        playerID: String,
+        command: String,
+        resetsPendingVolume: Bool = false
+    ) async {
         guard let client else {
+            if resetsPendingVolume {
+                resetPendingVolume(for: playerID)
+            }
             errorText = "Configure API host and token first"
             return
         }
@@ -371,35 +355,17 @@ final class PlayerStore: ObservableObject {
                     "volume_level": .integer(level)
                 ]
             )
-            if currentTargetID == playerID {
-                lastSuccessfulTargetID = playerID
+            if resetsPendingVolume {
+                pendingIndividualVolumes.removeValue(forKey: playerID)
+            } else if currentTarget?.playerID == playerID {
+                completeCommand(for: playerID)
+                return
             }
             errorText = nil
         } catch {
-            errorText = error.localizedDescription
-        }
-    }
-
-    private func sendIndividualVolume(_ level: Int, playerID: String) async {
-        guard let client else {
-            pendingIndividualVolumes.removeValue(forKey: playerID)
-            rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
-            errorText = "Configure API host and token first"
-            return
-        }
-
-        do {
-            _ = try await client.send(
-                command: "players/cmd/volume_set",
-                args: [
-                    "player_id": .string(playerID),
-                    "volume_level": .integer(level)
-                ]
-            )
-            errorText = nil
-        } catch {
-            pendingIndividualVolumes.removeValue(forKey: playerID)
-            rebuildIndividualVolumeTargets(for: resolveCurrentTarget())
+            if resetsPendingVolume {
+                resetPendingVolume(for: playerID)
+            }
             errorText = error.localizedDescription
         }
     }
@@ -418,6 +384,8 @@ final class PlayerStore: ObservableObject {
             applySetupRequiredState(message: "Invalid host or port")
             return
         }
+
+        isSetupRequired = false
 
         if activeConfiguration != configuration || client == nil {
             let oldClient = client
@@ -479,9 +447,7 @@ final class PlayerStore: ObservableObject {
 
     private func applySetupRequiredState(message: String = "Configure host, port, and token") {
         connectionState = .disconnected(reason: nil)
-        connectionText = "Setup required"
-        statusSymbolName = "slider.horizontal.3"
-        canControl = false
+        isSetupRequired = true
         errorText = nil
         settingsStatusText = message
         clearFavoriteMedia()
@@ -498,8 +464,10 @@ final class PlayerStore: ObservableObject {
                 throw MAWebSocketError.internalFailure("players/all returned no result")
             }
 
-            let snapshot = try JSONValueDecoder.decode([MAPlayer].self, from: result)
-            applySnapshot(snapshot)
+            playersByID = Dictionary(
+                uniqueKeysWithValues: try JSONValueDecoder.decode([MAPlayer].self, from: result).map { ($0.playerID, $0) }
+            )
+            updateTargetAndUI()
             errorText = nil
         } catch {
             errorText = error.localizedDescription
@@ -527,35 +495,25 @@ final class PlayerStore: ObservableObject {
         self.favoriteAlbums = favoriteAlbums
     }
 
-    private func applySnapshot(_ players: [MAPlayer]) {
-        playersByID = Dictionary(uniqueKeysWithValues: players.map { ($0.playerID, $0) })
-        updateTargetAndUI()
-    }
-
-    private func updatePlayer(_ player: MAPlayer) {
-        playersByID[player.playerID] = player
-        updateTargetAndUI()
-    }
-
     private func removePlayer(withID playerID: String) {
         playersByID.removeValue(forKey: playerID)
         individualVolumeSendTasks[playerID]?.cancel()
         individualVolumeSendTasks.removeValue(forKey: playerID)
         pendingIndividualVolumes.removeValue(forKey: playerID)
-        if currentTargetID == playerID {
-            currentTargetID = nil
-        }
         updateTargetAndUI()
     }
 
     private func updateTargetAndUI() {
-        let resolution = currentTargetResolution()
+        let resolution = Self.resolveSelectableTargets(
+            players: Array(playersByID.values),
+            lastSuccessfulTargetID: lastSuccessfulTargetID
+        )
         let target = resolution.target
 
         selectableTargets = resolution.selectableTargets
-        currentTargetID = target?.playerID
+        currentTarget = target
 
-        applyTargetPresentation(target)
+        nowPlayingArtworkURL = resolveArtworkURL(for: target)
         rebuildIndividualVolumeTargets(for: target)
 
         if let volume = target?.effectiveVolume {
@@ -563,44 +521,6 @@ final class PlayerStore: ObservableObject {
             if sliderVolume != newVolume {
                 sliderVolume = newVolume
             }
-        }
-    }
-
-    private func resolveCurrentTarget() -> MAPlayer? {
-        if let currentTargetID, let existing = playersByID[currentTargetID], existing.isAvailable {
-            return existing
-        }
-
-        return currentTargetResolution().target
-    }
-
-    private func currentTargetResolution() -> TargetSelectionResolution {
-        Self.resolveSelectableTargets(
-            players: Array(playersByID.values),
-            lastSuccessfulTargetID: lastSuccessfulTargetID
-        )
-    }
-
-    private func applyTargetPresentation(_ target: MAPlayer?) {
-        canControl = target != nil && isConnected
-        canSkipTrack = (target?.supportsNextPrevious ?? false) && isConnected
-        targetText = target?.resolvedName ?? "No active target"
-        nowPlayingText = nowPlayingLine(for: target)
-        nowPlayingArtworkURL = resolveArtworkURL(for: target)
-
-        if let target {
-            isTargetPlaying = target.isPlaying
-            if target.isPlaying {
-                playPauseTitle = "Pause"
-                playPauseIconName = "pause.fill"
-            } else {
-                playPauseTitle = "Play"
-                playPauseIconName = "play.fill"
-            }
-        } else {
-            isTargetPlaying = false
-            playPauseTitle = "Play/Pause"
-            playPauseIconName = "playpause.fill"
         }
     }
 
@@ -631,17 +551,6 @@ final class PlayerStore: ObservableObject {
 
         individualVolumeTargets = targets
     }
-
-    private func nowPlayingLine(for target: MAPlayer?) -> String {
-        guard let target else {
-            return "Nothing playing"
-        }
-        if let line = target.nowPlayingLine {
-            return line
-        }
-        return target.isPlaying ? "Playing" : "Nothing playing"
-    }
-
     private func resolveArtworkURL(for target: MAPlayer?) -> URL? {
         guard let rawArtworkURL = target?.currentMedia?.artworkURLString else {
             return nil
@@ -674,15 +583,11 @@ final class PlayerStore: ObservableObject {
         return nil
     }
 
-    private func playbackCommand(for target: MAPlayer) -> String {
-        if target.isPlaying {
-            return target.supportsPause ? "players/cmd/pause" : "players/cmd/play_pause"
-        }
-        return "players/cmd/play"
-    }
-
     private func playbackFallbackCommands(for target: MAPlayer) -> [String] {
-        let preferredCommand = playbackCommand(for: target)
+        let preferredCommand =
+            target.isPlaying
+            ? (target.supportsPause ? "players/cmd/pause" : "players/cmd/play_pause")
+            : "players/cmd/play"
         let fallbackCommand = "players/cmd/play_pause"
 
         return preferredCommand == fallbackCommand
@@ -695,8 +600,12 @@ final class PlayerStore: ObservableObject {
         client: MAWebSocketClient
     ) async -> [MAFavoriteMediaItem] {
         do {
+            let command = switch kind {
+            case .playlist: "music/playlists/library_items"
+            case .album: "music/albums/library_items"
+            }
             guard let result = try await client.send(
-                command: favoriteLibraryCommand(for: kind),
+                command: command,
                 args: [
                     "favorite": .bool(true),
                     "limit": .integer(favoriteMediaLimit)
@@ -705,24 +614,10 @@ final class PlayerStore: ObservableObject {
                 return []
             }
 
-            return favoriteMediaItems(from: result, kind: kind)
+            return (result.arrayValue ?? []).compactMap { MAFavoriteMediaItem(kind: kind, value: $0) }
         } catch {
             return []
         }
-    }
-
-    private func favoriteLibraryCommand(for kind: MAFavoriteMediaKind) -> String {
-        switch kind {
-        case .playlist:
-            return "music/playlists/library_items"
-        case .album:
-            return "music/albums/library_items"
-        }
-    }
-
-    private func favoriteMediaItems(from result: JSONValue, kind: MAFavoriteMediaKind) -> [MAFavoriteMediaItem] {
-        let values = result.arrayValue ?? []
-        return values.compactMap { MAFavoriteMediaItem(kind: kind, value: $0) }
     }
 
     private func playFavoriteItem(
@@ -773,10 +668,8 @@ final class PlayerStore: ObservableObject {
             }
         }
 
-        guard let sourceTarget = resolveCurrentTarget() else {
-            lastSuccessfulTargetID = targetPlayerID
-            updateTargetAndUI()
-            errorText = nil
+        guard let sourceTarget = currentTarget else {
+            completeTargetSwitch(to: targetPlayerID)
             return
         }
 
@@ -785,9 +678,7 @@ final class PlayerStore: ObservableObject {
                 let sourceQueueID = try await activeQueueID(for: sourceTarget.playerID, client: client),
                 sourceQueueID != targetPlayerID
             else {
-                lastSuccessfulTargetID = targetPlayerID
-                updateTargetAndUI()
-                errorText = nil
+                completeTargetSwitch(to: targetPlayerID)
                 return
             }
 
@@ -798,12 +689,16 @@ final class PlayerStore: ObservableObject {
                     "target_queue_id": .string(targetPlayerID)
                 ]
             )
-            lastSuccessfulTargetID = targetPlayerID
-            updateTargetAndUI()
-            errorText = nil
+            completeTargetSwitch(to: targetPlayerID)
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    private func completeTargetSwitch(to playerID: String) {
+        lastSuccessfulTargetID = playerID
+        updateTargetAndUI()
+        errorText = nil
     }
 
     private func activeQueueID(for playerID: String, client: MAWebSocketClient) async throws -> String? {
@@ -819,92 +714,14 @@ final class PlayerStore: ObservableObject {
         return result.objectValue?["queue_id"]?.stringValue
     }
 
-    nonisolated static func resolveSelectableTargets(
-        players: [MAPlayer],
-        lastSuccessfulTargetID: String?
-    ) -> TargetSelectionResolution {
-        let selectableTargets = players
-            .filter(\.isSelectableTarget)
-            .sorted(by: arePlayersOrderedForDisplay)
-
-        let playingTargets = selectableTargets.filter(\.isPlaying)
-        let preferredTarget = playingTargets.first(where: \.isGroupLike)
-            ?? playingTargets.first(where: { !$0.isSyncedMember })
-            ?? selectableTargets.first(where: { $0.playerID == lastSuccessfulTargetID })
-
-        return TargetSelectionResolution(
-            target: preferredTarget,
-            selectableTargets: selectableTargets
-        )
-    }
-
-    nonisolated static func resolveIndividualVolumeTargets(
-        playersByID: [String: MAPlayer],
-        target: MAPlayer?
-    ) -> [MAPlayer] {
-        guard let target else {
-            return []
-        }
-
-        if !target.groupMemberIDs.isEmpty {
-            guard target.groupMemberIDs.count > 1 else {
-                return []
-            }
-
-            var seen = Set<String>()
-            return target.groupMemberIDs.compactMap { memberID in
-                guard seen.insert(memberID).inserted else {
-                    return nil
-                }
-
-                if memberID == target.playerID {
-                    return target
-                }
-
-                return playersByID[memberID]
-            }
-        }
-
-        let syncedMembers = playersByID.values
-            .filter { $0.syncedTo == target.playerID }
-            .sorted(by: arePlayersOrderedForDisplay)
-
-        guard !syncedMembers.isEmpty else {
-            return []
-        }
-
-        if (target.type ?? "").lowercased() == "group" {
-            return syncedMembers.count > 1 ? syncedMembers : []
-        }
-
-        return [target] + syncedMembers
-    }
-
-    nonisolated private static func arePlayersOrderedForDisplay(_ lhs: MAPlayer, _ rhs: MAPlayer) -> Bool {
-        let comparison = lhs.resolvedName.localizedCaseInsensitiveCompare(rhs.resolvedName)
-        return comparison == .orderedAscending || (comparison == .orderedSame && lhs.playerID < rhs.playerID)
-    }
-
-    nonisolated static func hasFavoriteMediaItems(
-        playlists: [MAFavoriteMediaItem],
-        albums: [MAFavoriteMediaItem]
-    ) -> Bool {
-        !playlists.isEmpty || !albums.isEmpty
-    }
-
     private func handleConnectionState(_ state: MAConnectionState) {
         connectionState = state
+        isSetupRequired = false
 
         switch state {
-        case .connecting:
-            connectionText = "Connecting"
-            statusSymbolName = "arrow.triangle.2.circlepath"
-        case .authenticating:
-            connectionText = "Authenticating"
-            statusSymbolName = "lock.shield"
+        case .connecting, .authenticating:
+            break
         case .connected:
-            connectionText = "Connected"
-            statusSymbolName = "dot.radiowaves.left.and.right"
             settingsStatusText = nil
             if collapseSettingsOnNextConnect {
                 collapseSettingsOnNextConnect = false
@@ -916,8 +733,6 @@ final class PlayerStore: ObservableObject {
                 _ = await playersRefresh
             }
         case let .disconnected(reason):
-            connectionText = "Disconnected"
-            statusSymbolName = "bolt.slash"
             clearFavoriteMedia()
             if let reason, !reason.isEmpty {
                 errorText = reason
@@ -948,12 +763,13 @@ final class PlayerStore: ObservableObject {
             }
             do {
                 let player = try JSONValueDecoder.decode(MAPlayer.self, from: data)
-                updatePlayer(player)
+                playersByID[player.playerID] = player
+                updateTargetAndUI()
             } catch {
                 errorText = "Failed to decode \(name): \(error.localizedDescription)"
             }
         case "player_removed":
-            guard let playerID = extractPlayerID(from: data) else {
+            guard let playerID = data?.stringValue ?? data?.objectValue?["player_id"]?.stringValue else {
                 return
             }
             removePlayer(withID: playerID)
@@ -987,90 +803,5 @@ final class PlayerStore: ObservableObject {
                 await self.refreshFavoriteMedia()
             }
         }
-    }
-
-    private func extractPlayerID(from value: JSONValue?) -> String? {
-        guard let value else {
-            return nil
-        }
-
-        if let direct = value.stringValue {
-            return direct
-        }
-
-        if let object = value.objectValue {
-            return object["player_id"]?.stringValue
-        }
-
-        return nil
-    }
-
-    nonisolated static func shouldRefreshFavoriteMedia(
-        objectID: String?,
-        data: JSONValue?
-    ) -> Bool {
-        return favoriteMediaKind(from: data) != nil
-            || favoriteMediaKind(fromURI: objectID) != nil
-    }
-
-    nonisolated private static func favoriteMediaKind(from value: JSONValue?) -> MAFavoriteMediaKind? {
-        guard let object = value?.objectValue else {
-            return nil
-        }
-
-        if let mediaKind = favoriteMediaKind(fromMediaType: object["media_type"]?.stringValue) {
-            return mediaKind
-        }
-
-        return favoriteMediaKind(fromURI: object["uri"]?.stringValue)
-    }
-
-    nonisolated private static func favoriteMediaKind(fromMediaType mediaType: String?) -> MAFavoriteMediaKind? {
-        switch mediaType?.lowercased() {
-        case "playlist":
-            return .playlist
-        case "album":
-            return .album
-        default:
-            return nil
-        }
-    }
-
-    nonisolated private static func favoriteMediaKind(fromURI uri: String?) -> MAFavoriteMediaKind? {
-        guard let uri else {
-            return nil
-        }
-
-        let normalized = uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty else {
-            return nil
-        }
-
-        if normalized.contains("playlist") {
-            return .playlist
-        }
-        if normalized.contains("album") {
-            return .album
-        }
-
-        return nil
-    }
-}
-
-struct TargetSelectionResolution {
-    let target: MAPlayer?
-    let selectableTargets: [MAPlayer]
-}
-
-struct IndividualVolumeTarget: Identifiable {
-    let playerID: String
-    let name: String
-    let volume: Double
-    let isAdjustable: Bool
-
-    var id: String { playerID }
-
-    var volumeText: String {
-        isAdjustable ? "\(Int(volume))%" : "--"
     }
 }
