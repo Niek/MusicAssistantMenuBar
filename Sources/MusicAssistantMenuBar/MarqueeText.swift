@@ -22,29 +22,27 @@ struct MarqueeText: View {
             let contentWidth = cachedTextWidth ?? measureTextWidth()
             let shouldScroll = !reduceMotion && contentWidth > availableWidth
 
-            Group {
-                if shouldScroll {
-                    TimelineView(.animation(minimumInterval: frameInterval, paused: false)) { context in
-                        let distance = contentWidth + gap
-                        let cycleDuration = TimeInterval(distance / speed)
-                        let elapsed = context.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: cycleDuration)
-                        let offset = -CGFloat(elapsed) * speed
+            if shouldScroll {
+                TimelineView(.animation(minimumInterval: frameInterval, paused: false)) { context in
+                    let distance = contentWidth + gap
+                    let cycleDuration = TimeInterval(distance / speed)
+                    let elapsed = context.date.timeIntervalSinceReferenceDate
+                        .truncatingRemainder(dividingBy: cycleDuration)
+                    let offset = -CGFloat(elapsed) * speed
 
-                        HStack(spacing: gap) {
-                            label
-                            label
-                        }
-                        .offset(x: offset)
+                    HStack(spacing: gap) {
+                        label
+                        label
                     }
-                    .mask(edgeFadeMask)
-                } else {
-                    label
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    .offset(x: offset)
                 }
+                .mask(edgeFadeMask)
+            } else {
+                label
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .clipped()
         }
+        .clipped()
         .onAppear {
             cachedTextWidth = measureTextWidth()
         }
